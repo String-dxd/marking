@@ -33,6 +33,15 @@ A 100% offline, privacy-first local workflow for AI-assisted marking, personaliz
 
 ---
 
+## 🔮 Future Roadmap (Subsequent Phase)
+
+In the upcoming phases, Tallus will expand its capabilities to include deep student analytics and automated resource generation:
+
+- **🔬 Granular Skill & Topic Monitoring**: Go beyond assignment-level scores to track student competency at a micro-level. The system will map individual questions to specific learning objectives, topics, and skills, providing a high-resolution view of each student's academic progress.
+- **📝 Personalized Revision Worksheets**: Leverage the granular monitoring data to automatically generate custom-tailored revision materials. The AI will structure bespoke worksheets for each student, dynamically focusing on their unique areas of weakness and reinforcing foundational competencies based on their historical performance.
+
+---
+
 ## 🚀 Quick Start
 
 ### 1. Prerequisites
