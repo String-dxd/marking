@@ -36,9 +36,9 @@ A 100% offline, privacy-first local workflow for AI-assisted marking, personaliz
 ## 🚀 Quick Start
 
 ### 1. Prerequisites
-Ensure Ollama is installed and running with `qwen2.5vl:7b`:
+Ensure Ollama is installed and running with `qwen3.8:latest`:
 ```bash
-ollama run qwen2.5vl:7b
+ollama run qwen3.8:latest
 ```
 
 ### 2. Launch the Application
