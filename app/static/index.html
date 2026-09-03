@@ -1,0 +1,1019 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-900 text-slate-100">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Antigravity AI Marker - Local Student Feedback & Performance System</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#eef2ff',
+                            100: '#e0e7ff',
+                            500: '#6366f1',
+                            600: '#4f46e5',
+                            700: '#4338ca',
+                            800: '#3730a3',
+                            900: '#312e81',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="h-full flex flex-col font-sans antialiased bg-slate-950 text-slate-100 selection:bg-indigo-500 selection:text-white">
+
+    <!-- Top Navigation Bar -->
+    <header class="bg-slate-900 border-b border-slate-800 sticky top-0 z-40 px-4 md:px-6 py-2.5 md:py-3.5 flex items-center justify-between shadow-lg">
+        <div class="flex items-center space-x-3">
+            <div class="w-9 h-9 md:w-10 md:h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center shadow-md shadow-indigo-500/20 shrink-0">
+                <i data-lucide="sparkles" class="w-4 h-4 md:w-5 md:h-5 text-white"></i>
+            </div>
+            <div>
+                <h1 class="text-base md:text-lg font-bold tracking-tight text-white flex items-center gap-2">
+                    AI Marker Pro
+                    <span class="text-[10px] md:text-xs px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-800 font-medium">Offline</span>
+                </h1>
+                <p class="text-[10px] md:text-xs text-slate-400 hidden sm:block">Intelligent Grading & Student Analytics</p>
+            </div>
+        </div>
+
+        <!-- Desktop Navigation Tabs (Hidden on Mobile) -->
+        <nav class="hidden md:flex items-center bg-slate-800/80 p-1 rounded-xl border border-slate-700/60">
+            <button onclick="switchTab('dashboard')" id="tab-dashboard" class="tab-btn active px-3.5 py-1.5 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5">
+                <i data-lucide="layout-dashboard" class="w-3.5 h-3.5"></i> Dashboard
+            </button>
+            <button onclick="switchTab('assignments')" id="tab-assignments" class="tab-btn px-3.5 py-1.5 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5">
+                <i data-lucide="book-open-check" class="w-3.5 h-3.5"></i> Assignments
+            </button>
+            <button onclick="switchTab('processing')" id="tab-processing" class="tab-btn px-3.5 py-1.5 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5">
+                <i data-lucide="scan-line" class="w-3.5 h-3.5"></i> Queue
+            </button>
+            <button onclick="switchTab('review')" id="tab-review" class="tab-btn px-3.5 py-1.5 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5">
+                <i data-lucide="check-check" class="w-3.5 h-3.5"></i> Review
+                <span id="review-pending-badge" class="hidden text-[10px] bg-amber-500 text-slate-950 px-1.5 py-0.2 rounded-full font-bold">0</span>
+            </button>
+            <button onclick="switchTab('students')" id="tab-students" class="tab-btn px-3.5 py-1.5 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5">
+                <i data-lucide="users" class="w-3.5 h-3.5"></i> Students
+            </button>
+        </nav>
+
+        <!-- Ollama Connection Status -->
+        <div class="flex items-center gap-2">
+            <div id="ollama-status-badge" class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700 text-xs">
+                <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse" id="ollama-indicator"></span>
+                <span id="ollama-status-text" class="text-[11px] text-slate-300">Ollama...</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="flex-1 overflow-y-auto p-3.5 md:p-6 pb-24 md:pb-6 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950">
+        
+        <!-- 1. DASHBOARD VIEW -->
+        <section id="view-dashboard" class="tab-view max-w-7xl mx-auto space-y-6">
+            <!-- Stat Cards -->
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-5">
+                <div class="stat-card bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-sm">
+                    <div class="flex items-center justify-between text-slate-400 text-sm">
+                        <span>Total Assignments</span>
+                        <i data-lucide="files" class="w-4 h-4 text-indigo-400"></i>
+                    </div>
+                    <div class="text-3xl font-extrabold text-white mt-2" id="stat-assignments">0</div>
+                    <div class="text-xs text-slate-500 mt-1">Configured marking schemes</div>
+                </div>
+                <div class="stat-card bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-sm">
+                    <div class="flex items-center justify-between text-slate-400 text-sm">
+                        <span>Students Tracked</span>
+                        <i data-lucide="graduation-cap" class="w-4 h-4 text-emerald-400"></i>
+                    </div>
+                    <div class="text-3xl font-extrabold text-white mt-2" id="stat-students">0</div>
+                    <div class="text-xs text-slate-500 mt-1">Across all cohorts</div>
+                </div>
+                <div class="stat-card bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-sm">
+                    <div class="flex items-center justify-between text-slate-400 text-sm">
+                        <span>Pending Approval</span>
+                        <i data-lucide="clock" class="w-4 h-4 text-amber-400"></i>
+                    </div>
+                    <div class="text-3xl font-extrabold text-amber-400 mt-2" id="stat-pending">0</div>
+                    <div class="text-xs text-slate-500 mt-1">Awaiting teacher sign-off</div>
+                </div>
+                <div class="stat-card bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-sm">
+                    <div class="flex items-center justify-between text-slate-400 text-sm">
+                        <span>Cohort Avg Score</span>
+                        <i data-lucide="trending-up" class="w-4 h-4 text-violet-400"></i>
+                    </div>
+                    <div class="text-3xl font-extrabold text-emerald-400 mt-2" id="stat-avg-score">--%</div>
+                    <div class="text-xs text-slate-500 mt-1">Across approved submissions</div>
+                </div>
+            </div>
+
+            <!-- Performance Trend Chart & Recent Approvals -->
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div class="lg:col-span-2 bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-sm">
+                    <div class="flex items-center justify-between mb-4">
+                        <div>
+                            <h3 class="font-bold text-white text-base">Class Performance Trends</h3>
+                            <p class="text-xs text-slate-400">Historical grade distribution and score progression</p>
+                        </div>
+                        <select id="trend-cohort-select" onchange="loadCohortTrends()" class="bg-slate-800 border border-slate-700 text-xs text-slate-200 rounded-lg px-3 py-1.5">
+                            <option value="">All Classes</option>
+                        </select>
+                    </div>
+                    <div class="h-64 relative">
+                        <canvas id="classTrendChart"></canvas>
+                    </div>
+                </div>
+
+                <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-sm flex flex-col">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="font-bold text-white text-base">Ready for Review</h3>
+                        <span class="text-xs text-indigo-400 hover:underline cursor-pointer" onclick="switchTab('review')">View All</span>
+                    </div>
+                    <div id="quick-review-list" class="space-y-3 flex-1 overflow-y-auto pr-1 max-h-64">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Workflow Quick Start Guide Banner -->
+            <div class="bg-gradient-to-r from-indigo-950/60 via-slate-900/80 to-purple-950/60 border border-indigo-900/50 rounded-2xl p-6 flex flex-col md:flex-row items-center justify-between gap-4">
+                <div class="space-y-1">
+                    <h4 class="font-semibold text-indigo-200 flex items-center gap-2">
+                        <i data-lucide="zap" class="w-4 h-4 text-indigo-400"></i> Automatic Splitting & Marking Pipeline
+                    </h4>
+                    <p class="text-xs text-slate-400 max-w-2xl">
+                        1. Create Assignment ➔ 2. Upload combined class PDF (Auto-splits into student docs & extracts names) ➔ 3. Review highlighted unverified names ➔ 4. Approve & Print Reports.
+                    </p>
+                </div>
+                <div class="flex items-center gap-3">
+                    <button onclick="openCreateAssignmentModal()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-lg shadow-indigo-600/30 transition-all flex items-center gap-2">
+                        <i data-lucide="plus" class="w-4 h-4"></i> New Assignment
+                    </button>
+                    <button onclick="switchTab('processing')" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold transition-all flex items-center gap-2">
+                        <i data-lucide="upload" class="w-4 h-4"></i> Upload & Split Scans
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- 2. ASSIGNMENTS VIEW -->
+        <section id="view-assignments" class="tab-view max-w-7xl mx-auto space-y-6 hidden">
+            <div class="flex items-center justify-between flex-wrap gap-3">
+                <div>
+                    <h2 class="text-xl font-bold text-white">Assignments & Marking Schemes</h2>
+                    <p class="text-xs text-slate-400">Manage test rubrics, criteria, and answer keys</p>
+                </div>
+                <div class="flex items-center gap-3">
+                    <!-- Batch Action Controls -->
+                    <div id="assignments-batch-actions" class="hidden flex items-center gap-2 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-xl">
+                        <span id="assignments-selected-count" class="text-xs text-indigo-300 font-semibold">0 selected</span>
+                        <button type="button" onclick="handleBulkDeleteAssignments()" class="px-2.5 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-semibold transition-all flex items-center gap-1 shadow-sm">
+                            <i data-lucide="trash-2" class="w-3.5 h-3.5"></i> Delete Selected
+                        </button>
+                        <button type="button" onclick="clearAssignmentSelections()" class="text-xs text-slate-400 hover:text-white px-1">
+                            Cancel
+                        </button>
+                    </div>
+                    <button type="button" onclick="toggleSelectAllAssignments()" id="btn-select-all-assignments" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5">
+                        <i data-lucide="check-square" class="w-3.5 h-3.5 text-indigo-400"></i> Select All
+                    </button>
+                    <button onclick="openCreateAssignmentModal()" class="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-sm font-semibold shadow-lg shadow-indigo-600/30 transition-all flex items-center gap-2">
+                        <i data-lucide="plus-circle" class="w-4 h-4"></i> Create Assignment
+                    </button>
+                </div>
+            </div>
+
+            <div id="assignments-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                <!-- Populated by JS -->
+            </div>
+        </section>
+
+        <!-- 3. SCANS, SPLITTING & INGESTION VIEW -->
+        <section id="view-processing" class="tab-view max-w-7xl mx-auto space-y-6 hidden">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h2 class="text-xl font-bold text-white">Scan Ingestion, Auto-Splitting & Parsing</h2>
+                    <p class="text-xs text-slate-400">Upload a single combined PDF for the whole class (auto-split) or multiple separate student files.</p>
+                </div>
+                <div class="flex items-center gap-3">
+                    <span class="text-xs text-slate-400">Target Assignment:</span>
+                    <select id="upload-target-assignment" class="bg-slate-800 border border-slate-700 text-xs text-slate-200 rounded-xl px-3 py-2 font-medium">
+                        <!-- Populated by JS -->
+                    </select>
+                </div>
+            </div>
+
+            <!-- Ingestion Mode Selector & Upload Card -->
+            <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-sm space-y-5">
+                
+                <!-- Upload Mode Tabs -->
+                <div class="flex items-center gap-3 border-b border-slate-800 pb-4">
+                    <button type="button" onclick="setIngestMode('split_combined')" id="btn-mode-split" class="px-4 py-2 text-xs font-bold rounded-xl transition-all flex items-center gap-2 bg-indigo-600 text-white shadow-md shadow-indigo-600/20">
+                        <i data-lucide="split" class="w-4 h-4"></i> Split 1 Combined Class PDF into Student Docs
+                    </button>
+                    <button type="button" onclick="setIngestMode('multi_files')" id="btn-mode-multi" class="px-4 py-2 text-xs font-semibold text-slate-400 hover:text-white rounded-xl transition-all flex items-center gap-2 bg-slate-800 border border-slate-700">
+                        <i data-lucide="files" class="w-4 h-4"></i> Upload Separate Student Files
+                    </button>
+                </div>
+
+                <form id="upload-scan-form" onsubmit="handleIngestSubmit(event)" class="space-y-4">
+                    
+                    <!-- Mode 1 Parameters: Splitting settings -->
+                    <div id="split-settings-panel" class="grid grid-cols-1 md:grid-cols-3 gap-4 bg-slate-950 p-4 rounded-xl border border-slate-800">
+                        <div>
+                            <label class="block text-xs font-semibold text-indigo-300 mb-1">Pages per Student Script</label>
+                            <div class="flex items-center gap-2">
+                                <input type="number" id="split-pages-per-student" min="1" max="50" value="2" class="w-24 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white font-bold text-center focus:outline-none focus:border-indigo-500">
+                                <span class="text-xs text-slate-400">pages / student</span>
+                            </div>
+                        </div>
+                        <div class="flex flex-col justify-center">
+                            <label class="flex items-center gap-2 text-xs text-slate-300 cursor-pointer select-none">
+                                <input type="checkbox" id="split-reverse-pages" class="w-4 h-4 text-indigo-600 rounded bg-slate-800 border-slate-700">
+                                <span>Reverse pages inside each script</span>
+                            </label>
+                            <span class="text-[11px] text-slate-500 mt-0.5">Use if scanner outputted pages 3,2,1 for each student</span>
+                        </div>
+                        <div class="flex flex-col justify-center">
+                            <label class="flex items-center gap-2 text-xs text-slate-300 cursor-pointer select-none">
+                                <input type="checkbox" id="split-reverse-entire" class="w-4 h-4 text-indigo-600 rounded bg-slate-800 border-slate-700">
+                                <span>Reverse entire scan stack order</span>
+                            </label>
+                            <span class="text-[11px] text-slate-500 mt-0.5">Use if entire feeder stack was scanned upside down</span>
+                        </div>
+                    </div>
+
+                    <!-- Notice on Auto-Extraction & Highlighting -->
+                    <div class="flex items-center justify-between bg-indigo-950/40 border border-indigo-800/40 rounded-xl p-3.5 text-xs text-indigo-300">
+                        <div class="flex items-center gap-2">
+                            <i data-lucide="sparkles" class="w-4 h-4 text-indigo-400 shrink-0"></i>
+                            <span><b>Smart Name Extraction & Verification:</b> The AI will automatically read student names on page 1 of each document. If a name is <b>NOT</b> in your existing database, the field will be highlighted in <b class="text-amber-400">AMBER</b> for quick review & correction!</span>
+                        </div>
+                    </div>
+
+                    <!-- Drag & Drop Zone -->
+                    <div class="border-2 border-dashed border-slate-700 hover:border-indigo-500/80 rounded-2xl p-8 text-center transition-all bg-slate-800/40">
+                        <input type="file" id="scan-file-input" required accept=".pdf,image/png,image/jpeg,image/webp" class="hidden" onchange="updateIngestFileSelection(this)">
+                        <label for="scan-file-input" class="cursor-pointer flex flex-col items-center justify-center space-y-2">
+                            <div class="w-12 h-12 rounded-full bg-indigo-950 text-indigo-400 flex items-center justify-center">
+                                <i data-lucide="file-up" class="w-6 h-6"></i>
+                            </div>
+                            <span class="text-sm font-semibold text-indigo-300" id="scan-file-label">Click to select combined class PDF file</span>
+                            <span class="text-xs text-slate-500" id="scan-file-subtext">e.g. 60-page PDF of 30 students' 2-page exams</span>
+                        </label>
+                    </div>
+
+                    <!-- Submit Button -->
+                    <div class="flex justify-end pt-2 border-t border-slate-800">
+                        <button type="submit" id="btn-upload-scan" class="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-sm font-semibold shadow-lg shadow-indigo-600/30 transition-all flex items-center gap-2">
+                            <i data-lucide="scissors" class="w-4 h-4"></i> Split, Auto-Parse & Ingest
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Ingested Submissions Queue Table -->
+            <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-sm">
+                <div class="flex items-center justify-between mb-4">
+                    <div>
+                        <h3 class="font-bold text-white text-base">Submissions Queue</h3>
+                        <p class="text-xs text-slate-400">Unverified / new student names are highlighted in amber. Click to review, correct, or mark.</p>
+                    </div>
+                    <button onclick="refreshSubmissionsQueue()" class="text-xs text-slate-400 hover:text-white flex items-center gap-1">
+                        <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Refresh
+                    </button>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-sm text-slate-300">
+                        <thead class="text-xs uppercase bg-slate-800/80 text-slate-400 border-b border-slate-700">
+                            <tr>
+                                <th class="px-4 py-3">Parsed Student Identity</th>
+                                <th class="px-4 py-3">Database Status</th>
+                                <th class="px-4 py-3">Assignment</th>
+                                <th class="px-4 py-3">Pages</th>
+                                <th class="px-4 py-3">Grading Status</th>
+                                <th class="px-4 py-3">Score</th>
+                                <th class="px-4 py-3 text-right">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="submissions-table-body" class="divide-y divide-slate-800">
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- 4. SPLIT-SCREEN REVIEW & APPROVAL VIEW -->
+        <section id="view-review" class="tab-view max-w-[1600px] mx-auto space-y-2.5 hidden h-[calc(100vh-115px)] md:h-[calc(100vh-100px)] flex flex-col">
+            
+            <!-- Student Submissions Navigation Bar across the entire class batch -->
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl px-3 md:px-4 py-2 flex flex-wrap items-center justify-between gap-2.5 shrink-0 shadow-sm">
+                <div class="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-start">
+                    <button type="button" onclick="prevStudentSubmission()" id="btn-prev-student" title="Previous Student Script (Alt + Left)" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold flex items-center gap-1 transition-all disabled:opacity-40 disabled:cursor-not-allowed">
+                        <i data-lucide="chevron-left" class="w-3.5 h-3.5"></i> Prev
+                    </button>
+
+                    <div class="flex items-center gap-1.5 bg-slate-950 px-2.5 py-1 rounded-xl border border-slate-800 flex-1 sm:flex-initial justify-center">
+                        <select id="review-student-selector" onchange="openReviewForSubmission(this.value)" class="bg-slate-900 border border-indigo-700/60 rounded-lg px-2 py-1 text-xs font-bold text-white focus:outline-none focus:border-indigo-500 max-w-[150px] sm:max-w-[200px] truncate">
+                            <!-- Populated by JS -->
+                        </select>
+                        <span class="text-xs text-indigo-400 font-bold" id="review-student-counter-badge">1/1</span>
+                    </div>
+
+                    <button type="button" onclick="nextStudentSubmission()" id="btn-next-student" title="Next Student Script (Alt + Right)" class="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold flex items-center gap-1 transition-all shadow-md shadow-indigo-600/20 disabled:opacity-40 disabled:cursor-not-allowed">
+                        Next <i data-lucide="chevron-right" class="w-3.5 h-3.5"></i>
+                    </button>
+                </div>
+
+                <div class="flex items-center gap-2.5 text-[11px] md:text-xs text-slate-400 w-full sm:w-auto justify-between sm:justify-end border-t sm:border-t-0 pt-1 sm:pt-0 border-slate-800/80">
+                    <span class="truncate max-w-[160px] sm:max-w-none">Task: <b class="text-white font-bold" id="review-assignment-title">Loading...</b></span>
+                    <span class="text-slate-600">•</span>
+                    <span class="text-emerald-400 font-bold" id="review-class-progress-badge">0/0 Approved</span>
+                </div>
+            </div>
+
+            <!-- Review Top Toolbar with Quick Student Edit & Database Match Warning -->
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl px-3 md:px-4 py-2 flex flex-wrap items-center justify-between gap-2 shrink-0">
+                <!-- Editable Student Information directly in toolbar with highlight if new -->
+                <div class="flex items-center gap-2 w-full sm:w-auto">
+                    <div class="flex items-center gap-1.5 bg-slate-950 px-2 py-1 rounded-xl border border-slate-800 flex-1 sm:flex-initial">
+                        <span class="text-[11px] text-slate-400 font-semibold">Student:</span>
+                        <input type="text" id="review-edit-student-name" oninput="saveStudentInfoCorrection()" class="bg-slate-900 border border-slate-700 rounded-lg px-2 py-0.5 text-xs font-bold text-white w-32 sm:w-44 transition-all" placeholder="Name">
+                        <button type="button" onclick="triggerAutoDetectName()" title="Read handwritten name with Vision AI" class="px-1.5 py-0.5 bg-indigo-950 hover:bg-indigo-900 text-indigo-300 border border-indigo-800 rounded-lg text-[10px] font-medium flex items-center gap-0.5 shrink-0">
+                            <i data-lucide="sparkles" class="w-2.5 h-2.5"></i> Parse
+                        </button>
+                    </div>
+                    <input type="hidden" id="review-edit-student-code">
+                    
+                    <!-- Dynamic Badges for Student Status -->
+                    <span id="student-match-badge" class="text-[10px] px-2 py-0.5 rounded-full font-semibold shrink-0"></span>
+                    <span id="review-status-badge" class="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700 font-medium shrink-0">Pending</span>
+                </div>
+
+                <!-- Review Action Controls: 2-Step Marking Pipeline -->
+                <div class="flex items-center gap-1.5 w-full sm:w-auto overflow-x-auto pb-0.5 sm:pb-0">
+                    <!-- Step 1 Button: Extract Student Work -->
+                    <button onclick="triggerStep1Extraction()" id="btn-step1-extract" title="Step 1: Extract student handwriting verbatim" class="px-2.5 py-1.5 bg-sky-700 hover:bg-sky-600 text-white rounded-xl text-xs font-semibold transition-all flex items-center gap-1 shrink-0 shadow-sm">
+                        <i data-lucide="scan-text" class="w-3.5 h-3.5 text-sky-200"></i> <span class="hidden sm:inline">Step 1: </span>Extract
+                    </button>
+
+                    <!-- Step 2 Button: Mark & Comment -->
+                    <button onclick="triggerStep2MarkAndComment()" id="btn-step2-mark-and-comment" title="Step 2: AI scores responses and synthesizes feedback" class="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition-all flex items-center gap-1 shrink-0 shadow-sm">
+                        <i data-lucide="check-square" class="w-3.5 h-3.5 text-indigo-200"></i> <span class="hidden sm:inline">Step 2: </span>Mark
+                    </button>
+
+                    <!-- Do All Button (Full Pipeline) -->
+                    <button onclick="triggerDoAll()" id="btn-do-all" title="Do All: Complete extraction, marking, and comment in one click" class="px-2.5 py-1.5 bg-violet-600 hover:bg-violet-500 text-white rounded-xl text-xs font-semibold transition-all flex items-center gap-1 shrink-0 shadow-md shadow-violet-600/20">
+                        <i data-lucide="zap" class="w-3.5 h-3.5"></i> Do All
+                    </button>
+
+                    <!-- Direct Mark Button (Beta) -->
+                    <button onclick="triggerDirectMarking()" id="btn-direct-mark" title="Direct Marking (Beta): AI overlays ticks, crosses, and remarks directly onto student script" class="px-2.5 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-semibold transition-all flex items-center gap-1 shrink-0 shadow-md shadow-emerald-600/20">
+                        <i data-lucide="sparkles" class="w-3.5 h-3.5 text-emerald-200"></i> Direct Mark
+                    </button>
+
+                    <button onclick="saveGradingDraft()" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold transition-all flex items-center gap-1 shrink-0">
+                        <i data-lucide="save" class="w-3.5 h-3.5"></i> Save
+                    </button>
+                    <button onclick="approveSubmission()" id="btn-approve" class="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold transition-all flex items-center gap-1 shrink-0 shadow-md shadow-emerald-600/20">
+                        <i data-lucide="check-circle-2" class="w-3.5 h-3.5"></i> Approve
+                    </button>
+                    <button onclick="downloadCurrentPdfReport()" id="btn-download-pdf-report" title="Generate & Download Standard Student PDF Report" class="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition-all flex items-center gap-1 shrink-0 shadow-sm">
+                        <i data-lucide="file-down" class="w-3.5 h-3.5"></i> Report PDF
+                    </button>
+                    <button onclick="downloadDirectMarkingPdf()" id="btn-download-direct-pdf" title="Download Direct Marked Script with Visual Overlays" class="px-2.5 py-1.5 bg-teal-700 hover:bg-teal-600 text-white rounded-xl text-xs font-semibold transition-all flex items-center gap-1 shrink-0 shadow-sm">
+                        <i data-lucide="file-check" class="w-3.5 h-3.5 text-teal-200"></i> Script PDF
+                    </button>
+                    <a id="btn-print-report" target="_blank" href="#" title="View or Print HTML Report" class="hidden px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold transition-all flex items-center gap-1 shrink-0">
+                        <i data-lucide="printer" class="w-3.5 h-3.5"></i> View
+                    </a>
+                    <button onclick="deleteCurrentSubmission()" title="Delete this student submission from review queue" class="px-2 py-1.5 bg-rose-950/60 hover:bg-rose-900 text-rose-300 border border-rose-800/60 rounded-xl text-xs font-semibold transition-all flex items-center gap-1 shrink-0">
+                        <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Live LLM Workload & Progress Activity Bar -->
+            <div id="ai-live-monitor-card" class="bg-slate-950 border border-indigo-900/60 rounded-2xl px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
+                <div class="flex items-center gap-2">
+                    <span class="relative flex h-2.5 w-2.5">
+                        <span id="ai-monitor-ping" class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 hidden"></span>
+                        <span id="ai-monitor-dot" class="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                    </span>
+                    <span class="font-bold text-white text-[11px]" id="ai-monitor-status-text">LLM Idle</span>
+                    <span class="text-slate-600 hidden sm:inline">•</span>
+                    <span class="text-slate-400 text-[11px] hidden sm:inline truncate max-w-xs" id="ai-monitor-stage-text">Select student & start marking</span>
+                </div>
+
+                <div class="flex items-center gap-3">
+                    <span id="ai-monitor-timer" class="font-mono text-indigo-300 text-[11px]">⏱️ 0.0s</span>
+                    <div class="w-20 md:w-32 bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                        <div id="ai-monitor-progress-bar" class="bg-indigo-500 h-1.5 rounded-full transition-all duration-300" style="width: 0%"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Mobile View Switcher Tabs (Visible on screens < lg) -->
+            <div class="lg:hidden flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800 shrink-0">
+                <button onclick="switchReviewMobileView('doc')" id="review-mobile-btn-doc" class="flex-1 py-1.5 text-xs font-bold rounded-lg text-white bg-indigo-600 flex items-center justify-center gap-1 transition-all">
+                    <i data-lucide="file-text" class="w-3.5 h-3.5"></i> <span>Scan (<span id="mobile-doc-page-badge">P.1</span>)</span>
+                </button>
+                <button onclick="switchReviewMobileView('rubric')" id="review-mobile-btn-rubric" class="flex-1 py-1.5 text-xs font-bold rounded-lg text-slate-400 hover:text-white flex items-center justify-center gap-1 transition-all">
+                    <i data-lucide="check-square" class="w-3.5 h-3.5"></i> <span>Questions</span>
+                </button>
+                <button onclick="switchReviewMobileView('feedback')" id="review-mobile-btn-feedback" class="flex-1 py-1.5 text-xs font-bold rounded-lg text-slate-400 hover:text-white flex items-center justify-center gap-1 transition-all">
+                    <i data-lucide="message-square" class="w-3.5 h-3.5"></i> <span>Remarks</span>
+                </button>
+            </div>
+
+            <!-- Split Screen Container -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 flex-1 min-h-0">
+                
+                <!-- Left Panel: Scanned Document Viewer with Advanced Pan & Zoom -->
+                <div id="review-panel-doc" class="bg-slate-900 border border-slate-800 rounded-2xl flex flex-col overflow-hidden min-h-[300px] lg:min-h-0">
+                    <!-- Document Toolbar -->
+                    <div class="bg-slate-800/80 px-3 md:px-4 py-2 border-b border-slate-800 flex flex-wrap items-center justify-between text-xs text-slate-300 shrink-0 select-none gap-1.5">
+                        <div class="flex items-center gap-1.5">
+                            <span class="text-[11px]">P.<span id="current-page-num" class="font-bold text-white">1</span>/<span id="total-pages-num" class="font-bold text-white">1</span></span>
+                            <div class="flex items-center space-x-1">
+                                <button onclick="prevPage()" title="Previous Page" class="p-1 rounded bg-slate-700 hover:bg-slate-600 text-white"><i data-lucide="chevron-left" class="w-3.5 h-3.5"></i></button>
+                                <button onclick="nextPage()" title="Next Page" class="p-1 rounded bg-slate-700 hover:bg-slate-600 text-white"><i data-lucide="chevron-right" class="w-3.5 h-3.5"></i></button>
+                            </div>
+                        </div>
+
+                        <!-- Smooth Pan & Zoom Controls + Direct Marking Overlay Toggle -->
+                        <div class="flex items-center gap-1">
+                            <button onclick="toggleDirectMarkingOverlay()" id="btn-toggle-overlay" title="Toggle Direct Marking Overlay Visibility" class="px-2 py-0.5 rounded bg-emerald-950 hover:bg-emerald-900 text-emerald-300 border border-emerald-800 flex items-center gap-1 text-[11px] font-semibold">
+                                <i data-lucide="eye" class="w-3 h-3"></i> <span>Overlay: <strong id="overlay-toggle-status">ON</strong></span>
+                            </button>
+                            <button onclick="clearDirectMarks()" id="btn-clear-marks" title="Clear all visual direct markings on this student's script" class="px-2 py-0.5 rounded bg-rose-950/70 hover:bg-rose-900 text-rose-300 border border-rose-800/80 flex items-center gap-1 text-[11px] font-semibold">
+                                <i data-lucide="eraser" class="w-3 h-3"></i> <span class="hidden sm:inline">Clear Marks</span>
+                            </button>
+                            <button onclick="rotateCurrentPage()" title="Rotate 90° Clockwise" class="px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600 text-white flex items-center gap-0.5 text-[11px]">
+                                <i data-lucide="rotate-cw" class="w-3 h-3"></i> <span class="hidden sm:inline">Rotate</span>
+                            </button>
+                            <button onclick="reverseAllPagesCurrent()" title="Reverse All Pages Order" class="px-2 py-0.5 rounded bg-amber-900/60 hover:bg-amber-800 text-amber-200 border border-amber-700/50 flex items-center gap-0.5 text-[11px]">
+                                <i data-lucide="arrow-up-down" class="w-3 h-3"></i> <span class="hidden sm:inline">Reverse</span>
+                            </button>
+                            <div class="flex items-center space-x-0.5 bg-slate-950 p-0.5 rounded-lg border border-slate-700">
+                                <button onclick="zoomDoc(-0.2)" title="Zoom Out" class="p-1 rounded hover:bg-slate-800 text-white"><i data-lucide="zoom-out" class="w-3 h-3"></i></button>
+                                <span id="doc-zoom-label" class="px-1 text-[10px] font-mono text-indigo-300 font-bold">100%</span>
+                                <button onclick="zoomDoc(0.2)" title="Zoom In" class="p-1 rounded hover:bg-slate-800 text-white"><i data-lucide="zoom-in" class="w-3 h-3"></i></button>
+                                <button onclick="resetDocPanZoom()" title="Fit" class="px-1.5 py-0.5 rounded hover:bg-slate-800 text-slate-300 text-[10px] font-semibold border-l border-slate-700">Fit</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Interactive Image Display Viewport with Drag-to-Pan & Wheel-Zoom -->
+                    <div id="doc-viewport" class="flex-1 overflow-hidden p-2 flex items-center justify-center bg-slate-950/90 relative cursor-grab active:cursor-grabbing select-none" style="touch-action: none;">
+                        <div id="doc-loading" class="hidden absolute inset-0 bg-slate-950/80 flex flex-col items-center justify-center space-y-3 z-10">
+                            <div class="w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+                            <span class="text-xs text-indigo-300 font-medium">Processing scan image...</span>
+                        </div>
+                        <div id="pan-zoom-container" class="transition-transform duration-75 origin-center flex items-center justify-center pointer-events-none">
+                            <div id="paper-image-wrapper" class="relative inline-block pointer-events-auto shadow-2xl rounded">
+                                <img id="main-scan-img" src="" alt="Student Scan Page" class="max-w-none rounded block pointer-events-none" style="max-height: 85vh;">
+                                <svg id="direct-marking-svg" viewBox="0 0 1000 1000" preserveAspectRatio="none" class="absolute inset-0 w-full h-full pointer-events-auto z-10 transition-opacity duration-200"></svg>
+                            </div>
+                        </div>
+                        
+                        <!-- Pan Helper Overlay Tag -->
+                        <div class="absolute bottom-2 left-2 px-2 py-1 bg-slate-900/80 border border-slate-800 rounded-lg text-[10px] text-slate-400 pointer-events-none flex items-center gap-1">
+                            <i data-lucide="move" class="w-3 h-3 text-slate-500"></i> Pinch to Zoom • Drag to Pan • Direct Marking Overlay Active
+                        </div>
+                    </div>
+
+                    <!-- Thumbnails Strip -->
+                    <div id="thumbnails-strip" class="bg-slate-900 px-3 py-1.5 border-t border-slate-800 flex items-center gap-2 overflow-x-auto shrink-0 min-h-[65px]">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+
+                <!-- Right Panel: Rubric Grading & Feedback Editor -->
+                <div id="review-panel-rubric" class="hidden lg:flex bg-slate-900 border border-slate-800 rounded-2xl flex flex-col overflow-hidden min-h-[300px] lg:min-h-0">
+                    <div class="bg-slate-800/80 px-3 md:px-4 py-2 border-b border-slate-800 flex items-center justify-between shrink-0">
+                        <h3 class="font-bold text-white text-xs md:text-sm flex items-center gap-1.5">
+                            <i data-lucide="file-check" class="w-4 h-4 text-indigo-400"></i> Marks & Feedback
+                        </h3>
+                        <div class="flex items-center gap-2">
+                            <div class="text-right">
+                                <span class="text-[10px] text-slate-400 block">Total:</span>
+                                <span class="font-mono text-sm md:text-base font-extrabold text-white" id="computed-total-marks">0 / 0</span>
+                            </div>
+                            <span id="grade-badge" class="px-2 py-0.5 rounded-lg bg-indigo-950 text-indigo-300 font-bold border border-indigo-800 text-xs">Grade: -</span>
+                        </div>
+                    </div>
+
+                    <div class="flex-1 overflow-y-auto p-5 space-y-5">
+                        
+                        <!-- AI Evaluation Status / Progress Box -->
+                        <div id="ai-marking-indicator" class="hidden bg-indigo-950/70 border border-indigo-800/60 rounded-xl p-4 flex items-center gap-4">
+                            <div class="w-6 h-6 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin"></div>
+                            <div>
+                                <h4 class="text-sm font-semibold text-indigo-200">Local AI Model is Grading...</h4>
+                                <p class="text-xs text-indigo-400">Analyzing handwriting, evaluating rubric criteria, and personalizing feedback.</p>
+                            </div>
+                        </div>
+
+                        <!-- Question Grades Section -->
+                        <div class="space-y-3">
+                            <div class="flex items-center justify-between">
+                                <h4 class="text-xs font-bold uppercase tracking-wider text-slate-400">Questions Evaluation</h4>
+                                <button onclick="addNewQuestionField()" class="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
+                                    <i data-lucide="plus" class="w-3 h-3"></i> Add Question
+                                </button>
+                            </div>
+                            <div id="questions-container" class="space-y-3">
+                                <!-- Populated by JS -->
+                            </div>
+                        </div>
+
+                        <!-- Strengths & Improvements Boxes -->
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div class="space-y-1.5">
+                                <label class="block text-xs font-bold text-emerald-400 flex items-center gap-1.5">
+                                    <i data-lucide="check-circle" class="w-3.5 h-3.5"></i> Key Strengths & Mastered Skills
+                                </label>
+                                <textarea id="edit-strengths" rows="3" class="w-full bg-slate-950 border border-emerald-900/60 rounded-xl p-3 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 placeholder-slate-600" placeholder="• Mastery of formula..."></textarea>
+                            </div>
+                            <div class="space-y-1.5">
+                                <label class="block text-xs font-bold text-amber-400 flex items-center gap-1.5">
+                                    <i data-lucide="alert-circle" class="w-3.5 h-3.5"></i> Actionable Areas for Improvement
+                                </label>
+                                <textarea id="edit-improvements" rows="3" class="w-full bg-slate-950 border border-amber-900/60 rounded-xl p-3 text-xs text-slate-200 focus:outline-none focus:border-amber-500 placeholder-slate-600" placeholder="• Review sign changes in algebra..."></textarea>
+                            </div>
+                        </div>
+
+                        <!-- Overall Personalised Feedback -->
+                        <div class="space-y-1.5">
+                            <label class="block text-xs font-bold text-indigo-300 flex items-center gap-1.5">
+                                <i data-lucide="message-square-heart" class="w-3.5 h-3.5"></i> Overall Personalised Teacher Feedback
+                            </label>
+                            <textarea id="edit-overall-feedback" rows="4" class="w-full bg-slate-950 border border-indigo-900/60 rounded-xl p-3 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 placeholder-slate-600" placeholder="Dear student, you showed excellent understanding..."></textarea>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </section>
+
+        <!-- 5. STUDENT PROFILES & PERFORMANCE TRACKING VIEW -->
+        <section id="view-students" class="tab-view max-w-7xl mx-auto space-y-6 hidden">
+            <div class="flex items-center justify-between flex-wrap gap-4">
+                <div>
+                    <h2 class="text-xl font-bold text-white">Student Performance Profiles & Trends</h2>
+                    <p class="text-xs text-slate-400">Track longitudinal growth, mastery trajectories, and historical reports</p>
+                </div>
+                <div class="flex items-center gap-3">
+                    <button type="button" onclick="openAddStudentModal()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-lg shadow-indigo-600/30 transition-all flex items-center gap-2">
+                        <i data-lucide="user-plus" class="w-4 h-4"></i> Add Student
+                    </button>
+                    <button type="button" onclick="openUploadRosterModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold transition-all flex items-center gap-2">
+                        <i data-lucide="upload" class="w-4 h-4 text-indigo-400"></i> Upload Roster (CSV / Excel)
+                    </button>
+                    <button type="button" onclick="downloadRosterTemplate()" class="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-xl text-xs font-semibold transition-all flex items-center gap-2">
+                        <i data-lucide="download" class="w-4 h-4 text-indigo-400"></i> Template
+                    </button>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Students Roster List -->
+                <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-sm space-y-3 flex flex-col h-[600px]">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-2">
+                            <input type="checkbox" id="students-select-all-checkbox" onchange="toggleSelectAllStudents(this.checked)" title="Select All Students" class="w-4 h-4 text-indigo-600 rounded bg-slate-800 border-slate-700 cursor-pointer">
+                            <h3 class="font-bold text-white text-sm">Students Roster</h3>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span id="students-selected-badge" class="hidden text-xs bg-indigo-950 text-indigo-300 border border-indigo-800 px-2 py-0.5 rounded-full font-semibold">0 selected</span>
+                            <span id="student-count-badge" class="text-xs bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full">0</span>
+                        </div>
+                    </div>
+
+                    <!-- Students Batch Action Bar (Appears when 1+ selected) -->
+                    <div id="students-batch-bar" class="hidden bg-slate-950 border border-slate-800 rounded-xl p-2 flex items-center justify-between gap-2">
+                        <span id="students-batch-label" class="text-xs text-indigo-300 font-medium">0 selected</span>
+                        <div class="flex items-center gap-1.5">
+                            <button type="button" onclick="handleBulkDeleteStudents()" class="px-2.5 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-semibold transition-all flex items-center gap-1 shadow-sm">
+                                <i data-lucide="trash-2" class="w-3.5 h-3.5"></i> Delete Selected
+                            </button>
+                            <button type="button" onclick="clearStudentSelections()" class="p-1 text-slate-400 hover:text-white rounded-lg text-xs">
+                                <i data-lucide="x" class="w-3.5 h-3.5"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <input type="text" id="search-students" oninput="filterStudentsList()" placeholder="Search by name, class, or subject..." class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+                    
+                    <div id="students-roster-list" class="space-y-2 flex-1 overflow-y-auto pr-1">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+
+                <!-- Student Performance Detail & Analytics -->
+                <div class="lg:col-span-2 bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-sm flex flex-col h-[600px] overflow-y-auto space-y-6">
+                    <div id="student-detail-empty" class="flex-1 flex flex-col items-center justify-center text-center text-slate-500 space-y-3">
+                        <i data-lucide="user-check" class="w-12 h-12 text-slate-700"></i>
+                        <p class="text-sm">Select a student from the roster to view their performance trajectory and reports.</p>
+                    </div>
+
+                    <div id="student-detail-content" class="hidden space-y-6">
+                        <!-- Student Header Info -->
+                        <div class="flex items-center justify-between pb-4 border-b border-slate-800 flex-wrap gap-3">
+                            <div>
+                                <h3 class="text-lg font-bold text-white" id="profile-student-name">Student Name</h3>
+                                <p class="text-xs text-slate-400" id="profile-student-meta">Class: General • Subject: General</p>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <div class="text-right">
+                                    <div class="text-xs text-slate-400">Cumulative Average</div>
+                                    <div class="text-2xl font-black text-emerald-400" id="profile-avg-score">--%</div>
+                                </div>
+                                <button type="button" onclick="openEditStudentModal()" title="Edit student profile" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 shadow-sm">
+                                    <i data-lucide="edit-3" class="w-3.5 h-3.5 text-indigo-400"></i> Edit Profile
+                                </button>
+                                <button type="button" onclick="deleteCurrentStudentProfile()" title="Delete student profile" class="px-3 py-2 bg-rose-950/40 hover:bg-rose-900 text-rose-300 border border-rose-800/60 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 shadow-sm">
+                                    <i data-lucide="trash-2" class="w-3.5 h-3.5"></i> Delete Student
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Historical Trend Chart -->
+                        <div class="bg-slate-950/70 border border-slate-800 rounded-xl p-4">
+                            <h4 class="text-xs font-bold text-slate-300 mb-3">Score Progression Across Assignments</h4>
+                            <div class="h-52 relative">
+                                <canvas id="studentTrendChart"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- Past Submissions & Reports Table -->
+                        <div>
+                            <h4 class="text-xs font-bold text-slate-300 mb-3">Completed Assignments & Reports</h4>
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-left text-xs text-slate-300">
+                                    <thead class="uppercase bg-slate-800 text-slate-400">
+                                        <tr>
+                                            <th class="px-3 py-2">Assignment</th>
+                                            <th class="px-3 py-2">Subject</th>
+                                            <th class="px-3 py-2">Score</th>
+                                            <th class="px-3 py-2">Grade</th>
+                                            <th class="px-3 py-2 text-right">Report</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="student-history-table" class="divide-y divide-slate-800">
+                                        <!-- Populated by JS -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Modal: Create Assignment -->
+    <div id="modal-create-assignment" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in fade-in zoom-in duration-150 flex flex-col max-h-[90vh]">
+            <div class="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
+                <h3 class="font-bold text-white text-base flex items-center gap-2">
+                    <i data-lucide="file-plus" class="w-5 h-5 text-indigo-400"></i> Create New Assignment & Rubric
+                </h3>
+                <button onclick="closeCreateAssignmentModal()" class="text-slate-400 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button>
+            </div>
+
+            <form onsubmit="handleCreateAssignment(event)" class="p-6 space-y-4 overflow-y-auto flex-1">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-300 mb-1">Assignment Title</label>
+                        <input type="text" id="new-assignment-title" required placeholder="e.g. Unit 3 Mechanics Quiz" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-300 mb-1">Subject</label>
+                        <div class="space-y-1.5">
+                            <input type="text" id="new-assignment-subject" list="new-assignment-subjects-list" required placeholder="e.g. Physics / Mathematics / English" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+                            <select id="create-assignment-select-existing-subject" onchange="if(this.value){document.getElementById('new-assignment-subject').value=this.value;}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-300 focus:outline-none">
+                                <option value="">Select Existing Subject...</option>
+                            </select>
+                        </div>
+                        <datalist id="new-assignment-subjects-list"></datalist>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-300 mb-1">Class / Cohort</label>
+                        <div class="space-y-1.5">
+                            <input type="text" id="new-assignment-class" list="new-assignment-classes-list" required placeholder="e.g. Class 10A" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+                            <select id="create-assignment-select-existing-class" onchange="if(this.value){document.getElementById('new-assignment-class').value=this.value;}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-300 focus:outline-none">
+                                <option value="">Select Existing Class...</option>
+                            </select>
+                        </div>
+                        <datalist id="new-assignment-classes-list"></datalist>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-300 mb-1">Maximum Marks</label>
+                        <input type="number" step="0.5" id="new-assignment-marks" required placeholder="100" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+                    </div>
+                </div>
+
+                <!-- Upload Scheme PDF or Type Text -->
+                <div class="space-y-2">
+                    <div class="flex items-center justify-between">
+                        <label class="block text-xs font-semibold text-slate-300">Marking Scheme & Rubrics</label>
+                        <label class="text-xs text-indigo-400 hover:underline cursor-pointer flex items-center gap-1">
+                            <i data-lucide="file-text" class="w-3.5 h-3.5"></i> Upload Word Doc (.docx) / PDF / Text
+                            <input type="file" id="scheme-file-upload" accept=".docx,.doc,.pdf,.txt,.md" class="hidden" onchange="handleSchemeFileUpload(this)">
+                        </label>
+                    </div>
+                    <textarea id="new-assignment-scheme" rows="8" required class="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono leading-relaxed" placeholder="Upload Word doc / PDF or paste question rubrics, expected answers, and marks allocation..."></textarea>
+                </div>
+
+                <div class="flex justify-end gap-3 pt-4 border-t border-slate-800">
+                    <button type="button" onclick="closeCreateAssignmentModal()" class="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white bg-slate-800">Cancel</button>
+                    <button type="submit" class="px-5 py-2 rounded-xl text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 shadow-lg shadow-indigo-600/30">Save Assignment</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal: Edit Assignment -->
+    <div id="modal-edit-assignment" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in fade-in zoom-in duration-150 flex flex-col max-h-[90vh]">
+            <div class="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
+                <h3 class="font-bold text-white text-base flex items-center gap-2">
+                    <i data-lucide="edit-3" class="w-5 h-5 text-indigo-400"></i> Edit Assignment & Marking Scheme
+                </h3>
+                <button type="button" onclick="closeEditAssignmentModal()" class="text-slate-400 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button>
+            </div>
+
+            <form onsubmit="handleEditAssignmentSubmit(event)" class="p-6 space-y-4 overflow-y-auto flex-1">
+                <input type="hidden" id="edit-assignment-id">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="md:col-span-2">
+                        <label class="block text-xs font-semibold text-slate-300 mb-1">Assignment Title <span class="text-rose-400">*</span></label>
+                        <input type="text" id="edit-assignment-title" required placeholder="e.g. Unit 3 Mechanics Quiz" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-300 mb-1">Subject <span class="text-rose-400">*</span></label>
+                        <div class="space-y-1.5">
+                            <input type="text" id="edit-assignment-subject" list="edit-assignment-subjects-list" required placeholder="e.g. Physics / Mathematics" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+                            <select id="edit-assignment-select-existing-subject" onchange="if(this.value){document.getElementById('edit-assignment-subject').value=this.value;}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-300 focus:outline-none">
+                                <option value="">Select Existing Subject...</option>
+                            </select>
+                        </div>
+                        <datalist id="edit-assignment-subjects-list"></datalist>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-300 mb-1">Class / Cohort <span class="text-rose-400">*</span></label>
+                        <div class="space-y-1.5">
+                            <input type="text" id="edit-assignment-class" list="edit-assignment-classes-list" required placeholder="e.g. Class 10A" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+                            <select id="edit-assignment-select-existing-class" onchange="if(this.value){document.getElementById('edit-assignment-class').value=this.value;}" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-300 focus:outline-none">
+                                <option value="">Select Existing Class...</option>
+                            </select>
+                        </div>
+                        <datalist id="edit-assignment-classes-list"></datalist>
+                    </div>
+                    <div class="md:col-span-2">
+                        <label class="block text-xs font-semibold text-slate-300 mb-1">Maximum Marks <span class="text-rose-400">*</span></label>
+                        <input type="number" step="0.5" id="edit-assignment-marks" required placeholder="100" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+                    </div>
+                </div>
+
+                <!-- Upload Scheme PDF or Type Text -->
+                <div class="space-y-2">
+                    <div class="flex items-center justify-between">
+                        <label class="block text-xs font-semibold text-slate-300">Marking Scheme & Rubrics</label>
+                        <label class="text-xs text-indigo-400 hover:underline cursor-pointer flex items-center gap-1">
+                            <i data-lucide="file-text" class="w-3.5 h-3.5"></i> Replace via Word Doc (.docx) / PDF / Text
+                            <input type="file" id="edit-scheme-file-upload" accept=".docx,.doc,.pdf,.txt,.md" class="hidden" onchange="handleEditSchemeFileUpload(this)">
+                        </label>
+                    </div>
+                    <textarea id="edit-assignment-scheme" rows="8" required class="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono leading-relaxed" placeholder="Upload Word doc / PDF or edit question rubrics, expected answers, and marks allocation..."></textarea>
+                </div>
+
+                <div class="flex justify-end gap-3 pt-4 border-t border-slate-800">
+                    <button type="button" onclick="closeEditAssignmentModal()" class="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white bg-slate-800">Cancel</button>
+                    <button type="submit" class="px-5 py-2 rounded-xl text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 shadow-lg shadow-indigo-600/30">Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal: Upload Student Roster -->
+    <div id="modal-upload-roster" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl animate-in fade-in zoom-in duration-150 flex flex-col max-h-[90vh]">
+            <div class="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
+                <h3 class="font-bold text-white text-base flex items-center gap-2">
+                    <i data-lucide="users-round" class="w-5 h-5 text-indigo-400"></i> Upload Student Roster
+                </h3>
+                <button type="button" onclick="closeUploadRosterModal()" class="text-slate-400 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button>
+            </div>
+
+            <form onsubmit="handleRosterUpload(event)" class="p-6 space-y-5 overflow-y-auto flex-1">
+                <!-- Info banner -->
+                <div class="bg-indigo-950/40 border border-indigo-800/40 rounded-xl p-3.5 text-xs text-indigo-300 space-y-1.5">
+                    <div class="flex items-center gap-2 font-semibold text-white">
+                        <i data-lucide="info" class="w-4 h-4 text-indigo-400 shrink-0"></i>
+                        <span>Supported Formats: Excel (.xlsx) and CSV (.csv)</span>
+                    </div>
+                    <p class="text-slate-400 leading-relaxed">
+                        File should contain columns: <b>Student Name</b>, <b>Class</b>, and <b>Subject</b>. Unique student IDs are assigned automatically in the backend.
+                    </p>
+                </div>
+
+                <!-- Drag & Drop Zone -->
+                <div class="border-2 border-dashed border-slate-700 hover:border-indigo-500/80 rounded-2xl p-6 text-center transition-all bg-slate-800/40">
+                    <input type="file" id="roster-file-input" required accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="hidden" onchange="updateRosterFileSelection(this)">
+                    <label for="roster-file-input" class="cursor-pointer flex flex-col items-center justify-center space-y-2">
+                        <div class="w-12 h-12 rounded-full bg-indigo-950 text-indigo-400 flex items-center justify-center">
+                            <i data-lucide="file-spreadsheet" class="w-6 h-6"></i>
+                        </div>
+                        <span class="text-sm font-semibold text-indigo-300" id="roster-file-label">Click to select CSV or Excel roster file</span>
+                        <span class="text-xs text-slate-500" id="roster-file-subtext">e.g. class_roster.xlsx or students.csv</span>
+                    </label>
+                </div>
+
+                <div id="roster-upload-status" class="hidden text-xs rounded-xl p-3"></div>
+
+                <div class="flex items-center justify-between pt-4 border-t border-slate-800">
+                    <button type="button" onclick="downloadRosterTemplate()" class="text-xs text-indigo-400 hover:underline flex items-center gap-1">
+                        <i data-lucide="download" class="w-3.5 h-3.5"></i> Download CSV Template
+                    </button>
+                    <div class="flex items-center gap-3">
+                        <button type="button" onclick="closeUploadRosterModal()" class="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white bg-slate-800">Cancel</button>
+                        <button type="submit" id="btn-submit-roster" class="px-5 py-2 rounded-xl text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 shadow-lg shadow-indigo-600/30 flex items-center gap-2">
+                            <i data-lucide="upload" class="w-3.5 h-3.5"></i> Ingest Roster
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal: Add Student Profile Manually -->
+    <div id="modal-add-student" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl animate-in fade-in zoom-in duration-150 flex flex-col max-h-[90vh]">
+            <div class="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
+                <h3 class="font-bold text-white text-base flex items-center gap-2">
+                    <i data-lucide="user-plus" class="w-5 h-5 text-indigo-400"></i> Add Student Profile
+                </h3>
+                <button type="button" onclick="closeAddStudentModal()" class="text-slate-400 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button>
+            </div>
+
+            <form onsubmit="handleManualStudentSubmit(event)" class="p-6 space-y-4 overflow-y-auto flex-1">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-300 mb-1">Student Full Name <span class="text-rose-400">*</span></label>
+                    <input type="text" id="manual-student-name" required placeholder="e.g. Alice Smith" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <div class="flex items-center justify-between mb-1">
+                            <label class="text-xs font-semibold text-slate-300">Class / Cohort <span class="text-rose-400">*</span></label>
+                            <select onchange="if(this.value){ document.getElementById('manual-student-class').value = this.value; this.value=''; }" class="text-[11px] bg-slate-950 text-indigo-300 border border-indigo-800/60 rounded-lg px-2 py-0.5 focus:outline-none" id="manual-select-existing-class">
+                                <option value="">Select Existing...</option>
+                            </select>
+                        </div>
+                        <input type="text" id="manual-student-class" list="existing-classes-list" required placeholder="e.g. Class 10A" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+                    </div>
+                    <div>
+                        <div class="flex items-center justify-between mb-1">
+                            <label class="text-xs font-semibold text-slate-300">Subject</label>
+                            <select onchange="if(this.value){ document.getElementById('manual-student-subject').value = this.value; this.value=''; }" class="text-[11px] bg-slate-950 text-indigo-300 border border-indigo-800/60 rounded-lg px-2 py-0.5 focus:outline-none" id="manual-select-existing-subject">
+                                <option value="">Select Existing...</option>
+                            </select>
+                        </div>
+                        <input type="text" id="manual-student-subject" list="existing-subjects-list" placeholder="e.g. Mathematics" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-semibold text-slate-300 mb-1">Email Address <span class="text-slate-500 font-normal">(Optional)</span></label>
+                    <input type="email" id="manual-student-email" placeholder="e.g. alice@school.edu" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+                </div>
+
+                <div>
+                    <label class="block text-xs font-semibold text-slate-300 mb-1">Additional Notes <span class="text-slate-500 font-normal">(Optional)</span></label>
+                    <textarea id="manual-student-notes" rows="2" placeholder="e.g. Learning goals, accommodations..." class="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"></textarea>
+                </div>
+
+                <div id="manual-student-status" class="hidden text-xs rounded-xl p-3"></div>
+
+                <div class="flex justify-end gap-3 pt-3 border-t border-slate-800">
+                    <button type="button" onclick="closeAddStudentModal()" class="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white bg-slate-800">Cancel</button>
+                    <button type="submit" id="btn-save-manual-student" class="px-5 py-2 rounded-xl text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 shadow-lg shadow-indigo-600/30 flex items-center gap-2">
+                        <i data-lucide="check" class="w-3.5 h-3.5"></i> Save Student Profile
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal: Edit Student Profile -->
+    <div id="modal-edit-student" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl animate-in fade-in zoom-in duration-150 flex flex-col max-h-[90vh]">
+            <div class="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
+                <h3 class="font-bold text-white text-base flex items-center gap-2">
+                    <i data-lucide="user-cog" class="w-5 h-5 text-indigo-400"></i> Edit Student Profile
+                </h3>
+                <button type="button" onclick="closeEditStudentModal()" class="text-slate-400 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button>
+            </div>
+
+            <form onsubmit="handleEditStudentSubmit(event)" class="p-6 space-y-4 overflow-y-auto flex-1">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-300 mb-1">Student Full Name <span class="text-rose-400">*</span></label>
+                    <input type="text" id="edit-student-name" required placeholder="e.g. Alice Smith" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <div class="flex items-center justify-between mb-1">
+                            <label class="text-xs font-semibold text-slate-300">Class / Cohort <span class="text-rose-400">*</span></label>
+                            <select onchange="if(this.value){ document.getElementById('edit-student-class').value = this.value; this.value=''; }" class="text-[11px] bg-slate-950 text-indigo-300 border border-indigo-800/60 rounded-lg px-2 py-0.5 focus:outline-none" id="edit-select-existing-class">
+                                <option value="">Select Existing...</option>
+                            </select>
+                        </div>
+                        <input type="text" id="edit-student-class" list="existing-classes-list" required placeholder="e.g. Class 10A" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+                    </div>
+                    <div>
+                        <div class="flex items-center justify-between mb-1">
+                            <label class="text-xs font-semibold text-slate-300">Subject</label>
+                            <select onchange="if(this.value){ document.getElementById('edit-student-subject').value = this.value; this.value=''; }" class="text-[11px] bg-slate-950 text-indigo-300 border border-indigo-800/60 rounded-lg px-2 py-0.5 focus:outline-none" id="edit-select-existing-subject">
+                                <option value="">Select Existing...</option>
+                            </select>
+                        </div>
+                        <input type="text" id="edit-student-subject" list="existing-subjects-list" placeholder="e.g. Mathematics" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-semibold text-slate-300 mb-1">Email Address <span class="text-slate-500 font-normal">(Optional)</span></label>
+                    <input type="email" id="edit-student-email" placeholder="e.g. alice@school.edu" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+                </div>
+
+                <div>
+                    <label class="block text-xs font-semibold text-slate-300 mb-1">Additional Notes <span class="text-slate-500 font-normal">(Optional)</span></label>
+                    <textarea id="edit-student-notes" rows="2" placeholder="e.g. Learning goals, accommodations..." class="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"></textarea>
+                </div>
+
+                <div id="edit-student-status" class="hidden text-xs rounded-xl p-3"></div>
+
+                <div class="flex justify-end gap-3 pt-3 border-t border-slate-800">
+                    <button type="button" onclick="closeEditStudentModal()" class="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white bg-slate-800">Cancel</button>
+                    <button type="submit" id="btn-save-edit-student" class="px-5 py-2 rounded-xl text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 shadow-lg shadow-indigo-600/30 flex items-center gap-2">
+                        <i data-lucide="check" class="w-3.5 h-3.5"></i> Update Profile
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Dynamic Datalists for Autocompletion -->
+    <datalist id="existing-classes-list"></datalist>
+    <datalist id="existing-subjects-list"></datalist>
+
+    <!-- Mobile Bottom Navigation Bar (Fixed for Mobile Screens) -->
+    <nav id="mobile-bottom-nav" class="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-slate-900/95 backdrop-blur-md border-t border-slate-800 flex items-center justify-around py-2 px-1 text-[10px] text-slate-400 select-none shadow-2xl">
+        <button onclick="switchTab('dashboard')" id="mobile-tab-dashboard" class="mobile-nav-btn flex flex-col items-center gap-1 py-1 px-2 rounded-xl text-indigo-400 font-medium transition-all">
+            <i data-lucide="layout-dashboard" class="w-5 h-5"></i>
+            <span>Dashboard</span>
+        </button>
+        <button onclick="switchTab('assignments')" id="mobile-tab-assignments" class="mobile-nav-btn flex flex-col items-center gap-1 py-1 px-2 rounded-xl text-slate-400 font-medium transition-all">
+            <i data-lucide="book-open-check" class="w-5 h-5"></i>
+            <span>Tasks</span>
+        </button>
+        <button onclick="switchTab('processing')" id="mobile-tab-processing" class="mobile-nav-btn flex flex-col items-center gap-1 py-1 px-2 rounded-xl text-slate-400 font-medium transition-all">
+            <i data-lucide="scan-line" class="w-5 h-5"></i>
+            <span>Queue</span>
+        </button>
+        <button onclick="switchTab('review')" id="mobile-tab-review" class="mobile-nav-btn flex flex-col items-center gap-1 py-1 px-2 rounded-xl text-slate-400 font-medium transition-all relative">
+            <i data-lucide="check-check" class="w-5 h-5"></i>
+            <span>Review</span>
+            <span id="mobile-review-pending-badge" class="hidden absolute top-0.5 right-2 w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+        </button>
+        <button onclick="switchTab('students')" id="mobile-tab-students" class="mobile-nav-btn flex flex-col items-center gap-1 py-1 px-2 rounded-xl text-slate-400 font-medium transition-all">
+            <i data-lucide="users" class="w-5 h-5"></i>
+            <span>Students</span>
+        </button>
+    </nav>
+
+    <!-- Scripts -->
+    <script src="/static/js/app.js?v=4.9"></script>
+    <script>
+        lucide.createIcons();
+    </script>
+</body>
+</html>

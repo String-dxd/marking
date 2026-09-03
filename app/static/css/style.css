@@ -1,0 +1,109 @@
+/* Custom Styling for Antigravity AI Marker */
+
+.tab-btn {
+    color: #94a3b8;
+}
+
+.tab-btn:hover {
+    color: #f1f5f9;
+    background-color: rgba(51, 65, 85, 0.5);
+}
+
+.tab-btn.active {
+    color: #ffffff;
+    background-color: #4f46e5;
+    box-shadow: 0 4px 12px rgba(79, 70, 229, 0.35);
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: #0f172a;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #334155;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #475569;
+}
+
+/* Thumbnail Selection */
+.thumb-card {
+    transition: all 0.15s ease-in-out;
+    border: 2px solid transparent;
+}
+
+.thumb-card:hover {
+    transform: translateY(-2px);
+    border-color: #6366f1;
+}
+
+.thumb-card.active {
+    border-color: #4f46e5;
+    box-shadow: 0 0 12px rgba(99, 102, 241, 0.5);
+}
+
+/* Question Accordion Card */
+.q-card {
+    background: #090d16;
+    border: 1px solid #1e293b;
+    border-radius: 12px;
+    padding: 12px;
+    transition: border-color 0.15s;
+}
+
+.q-card:focus-within {
+    border-color: #4f46e5;
+}
+
+/* Document Viewport */
+#doc-viewport img {
+    max-height: 80vh;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+}
+
+/* Highlight for New / Unverified Student Name Field */
+.student-input-new {
+    border-color: #f59e0b !important;
+    background-color: rgba(120, 53, 15, 0.25) !important;
+    color: #fef08a !important;
+    box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.4) !important;
+}
+
+.student-input-existing {
+    border-color: #10b981 !important;
+    background-color: rgba(6, 78, 59, 0.15) !important;
+    color: #ffffff !important;
+}
+
+/* Mobile Touch & Layout Optimizations */
+#mobile-bottom-nav {
+    padding-bottom: calc(0.5rem + env(safe-area-inset-bottom, 0px));
+}
+
+.mobile-nav-btn {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    transition: all 0.15s ease-out;
+}
+
+.mobile-nav-btn:active {
+    transform: scale(0.92);
+}
+
+/* Smooth Touch Scrolling */
+.tab-view, #thumbnails-strip, #quick-review-list, #questions-container {
+    -webkit-overflow-scrolling: touch;
+}
+
+/* Safe touch target heights */
+button, select, input[type="text"], input[type="number"] {
+    touch-action: manipulation;
+}
