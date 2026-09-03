@@ -10,7 +10,7 @@ from app.core.ollama_client import ollama_client
 from app.api import assignments, students, submissions, grading, reports
 
 app = FastAPI(
-    title="Antigravity AI Marker & Student Feedback System",
+    title="Tallus - Assessment & Analytics",
     version="1.0.0",
     description="Privacy-First Local AI Marking & Feedback Workflow"
 )
@@ -59,5 +59,5 @@ def serve_index():
     index_file = static_dir / "index.html"
     if index_file.exists():
         return FileResponse(index_file)
-    return {"message": "AI Marker API is running."}
+    return {"message": "Tallus API is running."}
 

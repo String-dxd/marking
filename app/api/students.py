@@ -97,6 +97,20 @@ def get_cohort_analytics(class_name: Optional[str] = None):
 class BulkDeleteStudentsRequest(BaseModel):
     student_ids: List[int]
 
+class BulkUpdateStudentsRequest(BaseModel):
+    student_ids: List[int]
+    class_name: Optional[str] = None
+    subject: Optional[str] = None
+
+@router.post("/bulk-update")
+@router.put("/bulk-update")
+def bulk_update_students_endpoint(data: BulkUpdateStudentsRequest):
+    if not data.student_ids:
+        raise HTTPException(status_code=400, detail="No students selected")
+    
+    count = db.bulk_update_students(data.student_ids, class_name=data.class_name, subject=data.subject)
+    return {"success": True, "updated_count": count, "message": f"Successfully updated {count} student profile(s)."}
+
 @router.post("/bulk-delete")
 @router.delete("/bulk-delete")
 def bulk_delete_students_endpoint(data: BulkDeleteStudentsRequest):

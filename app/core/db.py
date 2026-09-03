@@ -144,6 +144,37 @@ def delete_student(student_id: int) -> bool:
     """Deletes a student along with their submissions and question grades."""
     return bulk_delete_students([student_id]) > 0
 
+def bulk_update_students(student_ids: List[int], class_name: Optional[str] = None, subject: Optional[str] = None) -> int:
+    """Updates the class and/or subject for multiple students."""
+    valid_ids = [int(sid) for sid in student_ids if sid]
+    if not valid_ids:
+        return 0
+        
+    updates = []
+    params = []
+    if class_name is not None and class_name.strip():
+        updates.append("class_name = ?")
+        params.append(class_name.strip())
+    if subject is not None and subject.strip():
+        updates.append("subject = ?")
+        params.append(subject.strip())
+        
+    if not updates:
+        return 0
+        
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    placeholders = ",".join("?" for _ in valid_ids)
+    
+    query = f"UPDATE students SET {', '.join(updates)} WHERE id IN ({placeholders})"
+    params.extend(valid_ids)
+    
+    cursor.execute(query, params)
+    updated_count = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return updated_count
+
 def bulk_delete_students(student_ids: List[int]) -> int:
     """Deletes multiple students along with their submissions and question grades."""
     valid_ids = [int(sid) for sid in student_ids if sid]

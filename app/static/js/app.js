@@ -2792,3 +2792,63 @@ document.addEventListener("keydown", (e) => {
         nextStudentSubmission();
     }
 });
+function openBulkEditStudentsModal() {
+    const ids = Array.from(selectedStudentIds);
+    if (ids.length === 0) return;
+    document.getElementById("bulk-edit-students-count").textContent = ids.length + " student(s) selected";
+    document.getElementById("bulk-edit-student-class").value = "";
+    document.getElementById("bulk-edit-student-subject").value = "";
+    document.getElementById("modal-bulk-edit-students").classList.remove("hidden");
+}
+
+function closeBulkEditStudentsModal() {
+    document.getElementById("modal-bulk-edit-students").classList.add("hidden");
+}
+
+async function handleBulkEditStudentsSubmit(e) {
+    e.preventDefault();
+    const ids = Array.from(selectedStudentIds);
+    if (ids.length === 0) return;
+
+    const className = document.getElementById("bulk-edit-student-class").value.trim();
+    const subjectName = document.getElementById("bulk-edit-student-subject").value.trim();
+
+    if (!className && !subjectName) {
+        alert("Please enter a new Class or Subject to update.");
+        return;
+    }
+
+    const btn = document.getElementById("btn-save-bulk-edit-students");
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Updating...';
+
+    try {
+        const payload = { student_ids: ids };
+        if (className) payload.class_name = className;
+        if (subjectName) payload.subject = subjectName;
+
+        const resp = await fetch("/api/students/bulk-update", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        });
+        
+        const data = await resp.json();
+        if (resp.ok && data.success) {
+            closeBulkEditStudentsModal();
+            clearStudentSelections();
+            await loadStudentsRoster();
+            populateExistingClassesAndSubjects();
+        } else {
+            alert("Error: " + (data.detail || JSON.stringify(data)));
+        }
+    } catch (err) {
+        console.error(err);
+        alert("Failed to update students.");
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+        if (window.lucide) window.lucide.createIcons();
+    }
+}
