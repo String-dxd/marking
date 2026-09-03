@@ -34,6 +34,11 @@ MARKING SCHEME:
 {marking_scheme}
 ----------------------------------------
 
+EVALUATOR GRADING RESULTS:
+----------------------------------------
+{grading_results}
+----------------------------------------
+
 MARKING RULES — follow exactly:
 
 TICKS ("tick"):
@@ -56,10 +61,11 @@ CIRCLES ("circle"):
 GRAPHS:
   - If marking a graph or drawing, do NOT scatter individual ticks or crosses over the image.
   - Create a vertical checklist in an empty white space near the top or side of the graph.
-  - For each grading criterion, generate an individual annotation of type "tick" (if met) or "cross" (if not met).
-  - Use the "remark" field to state the criterion name (e.g., "Axes labelled", "Correct scale").
+  - EXPLICIT INSTRUCTION: You MUST use the exact criteria breakdown from the EVALUATOR GRADING RESULTS above.
+  - For each grading criterion evaluated by the AI, generate an individual annotation of type "tick" (if awarded > 0) or "cross" (if awarded 0).
+  - Use the "remark" field to state the exact criterion name and score (e.g., "Axes labelled: 1/1").
   - Stack their bbox_2d coordinates vertically so they form a neat list.
-  - IN ADDITION to the checklist, if there are any WRONGLY plotted points, create an annotation of type "circle" tightly around each wrongly plotted point (use very tight coordinate tolerance).
+  - IN ADDITION to the checklist, if there are any WRONGLY plotted points noted in the grading results, create an annotation of type "circle" tightly around each wrongly plotted point.
 
 BLANK ANSWERS:
   - If a question or answer space is left completely blank, place a SINGLE "cross" centered in the empty space.
@@ -203,11 +209,14 @@ def generate_direct_marking_annotations(
             continue
 
         b64 = get_page_base64(img_path)
+        grading_results = json.dumps(submission.get("question_grades", []), indent=2)
+        
         prompt = DIRECT_MARKING_VISION_PROMPT.format(
             subject=subject,
             assignment_title=assignment_title,
             max_marks=max_marks,
-            marking_scheme=marking_scheme
+            marking_scheme=marking_scheme,
+            grading_results=grading_results
         )
 
         res = ollama_client.generate_chat(

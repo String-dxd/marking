@@ -807,6 +807,9 @@ async function loadSubmissionsQueue() {
             return `
                 <tr class="hover:bg-slate-800/40 transition-colors ${isNew ? 'bg-amber-950/10' : ''}">
                     <td class="px-4 py-3">
+                        <input type="checkbox" class="sub-checkbox rounded bg-slate-900 border-slate-600 text-indigo-500 focus:ring-indigo-500" value="${s.id}" />
+                    </td>
+                    <td class="px-4 py-3">
                         <div class="font-semibold ${isNew ? 'text-amber-300 font-bold' : 'text-white'} flex items-center gap-1.5">
                             ${s.student_name}
                             <button onclick="openReviewForSubmission(${s.id})" title="Edit / Correct Name" class="text-slate-500 hover:text-indigo-400"><i data-lucide="edit-3" class="w-3 h-3"></i></button>
@@ -2792,3 +2795,173 @@ document.addEventListener("keydown", (e) => {
         nextStudentSubmission();
     }
 });
+
+function toggleAllSubs(masterCheckbox) {
+    const checkboxes = document.querySelectorAll('.sub-checkbox');
+    checkboxes.forEach(cb => cb.checked = masterCheckbox.checked);
+}
+
+async function batchProcessSelected() {
+    const checkboxes = document.querySelectorAll('.sub-checkbox:checked');
+    if (checkboxes.length === 0) {
+        alert("Please select at least one submission to batch process.");
+        return;
+    }
+    
+    if (!confirm(`Are you sure you want to run extraction, grading, and direct marking for ${checkboxes.length} submissions? This may take some time.`)) {
+        return;
+    }
+    
+    startAiLiveMonitor(`Batch processing ${checkboxes.length} submissions (Extract -> Grade -> Direct Mark)...`);
+    
+    let successCount = 0;
+    let failCount = 0;
+    
+    for (const cb of checkboxes) {
+        const subId = cb.value;
+        try {
+            // 1. Grade (Extract + Grade + Remarks)
+            const gradeResp = await fetch(`/api/submissions/${subId}/grade`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    vision_model: "qwen3.8:latest",
+                    reasoning_model: "qwen3.8:latest",
+                    use_two_stage: true
+                })
+            });
+            
+            if (!gradeResp.ok) throw new Error("Grading failed");
+            
+            // 2. Direct Mark
+            const markResp = await fetch(`/api/submissions/${subId}/direct-mark?vision_model=qwen3.8:latest`, {
+                method: "POST"
+            });
+            
+            if (!markResp.ok) throw new Error("Direct marking failed");
+            
+            successCount++;
+        } catch (e) {
+            console.error(`Failed processing submission ${subId}:`, e);
+            failCount++;
+        }
+    }
+    
+    stopAiLiveMonitor(failCount === 0, `Batch processing complete. Success: ${successCount}, Failed: ${failCount}`);
+    loadSubmissionsQueue();
+}
+
+
+let batchPendingSubs = [];
+
+async function openBatchReviewModal() {
+    document.getElementById('batch-review-modal').classList.remove('hidden');
+    const tbody = document.getElementById('batch-review-table-body');
+    tbody.innerHTML = `<tr><td colspan="4" class="px-4 py-4 text-center text-slate-500">Loading works...</td></tr>`;
+    
+    try {
+        const resp = await fetch("/api/assignments");
+        const assignments = await resp.json();
+        
+        batchPendingSubs = [];
+        for (const a of assignments) {
+            const sResp = await fetch(`/api/submissions/assignment/${a.id}`);
+            const subs = await sResp.json();
+            const pending = subs.filter(s => s.status !== "approved");
+            pending.forEach(s => s.assignment_title = a.title);
+            batchPendingSubs.push(...pending);
+        }
+        
+        if (batchPendingSubs.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="4" class="px-4 py-8 text-center text-slate-400">No works pending review!</td></tr>`;
+            return;
+        }
+        
+        tbody.innerHTML = batchPendingSubs.map(s => {
+            let statusColor = "bg-amber-950 text-amber-400 border-amber-800";
+            if (s.status === "review_ready") statusColor = "bg-indigo-950 text-indigo-400 border-indigo-800";
+            if (s.status === "marking") statusColor = "bg-rose-950 text-rose-400 border-rose-800";
+            
+            return `
+                <tr class="hover:bg-slate-800 transition-colors">
+                    <td class="px-4 py-3">
+                        <input type="checkbox" class="batch-sub-checkbox rounded bg-slate-900 border-slate-600 text-indigo-500 focus:ring-indigo-500" value="${s.id}" />
+                    </td>
+                    <td class="px-4 py-3 font-semibold text-white">
+                        ${s.student_name} <span class="text-xs text-slate-500 font-normal ml-2">${s.student_code || ''}</span>
+                    </td>
+                    <td class="px-4 py-3 text-slate-300 text-xs">
+                        ${s.assignment_title}
+                    </td>
+                    <td class="px-4 py-3">
+                        <span class="px-2 py-0.5 rounded-full text-[10px] uppercase font-bold tracking-wider border ${statusColor}">
+                            ${s.status.replace('_', ' ')}
+                        </span>
+                    </td>
+                </tr>
+            `;
+        }).join('');
+        
+        lucide.createIcons();
+    } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="4" class="px-4 py-4 text-center text-rose-400">Error loading data.</td></tr>`;
+    }
+}
+
+function closeBatchReviewModal() {
+    document.getElementById('batch-review-modal').classList.add('hidden');
+}
+
+function toggleAllBatchSubs(masterCheckbox) {
+    const checkboxes = document.querySelectorAll('.batch-sub-checkbox');
+    checkboxes.forEach(cb => cb.checked = masterCheckbox.checked);
+}
+
+async function runBatchReviewPipeline() {
+    const checkboxes = document.querySelectorAll('.batch-sub-checkbox:checked');
+    if (checkboxes.length === 0) {
+        alert("Please select at least one work.");
+        return;
+    }
+    
+    closeBatchReviewModal();
+    startAiLiveMonitor(`Batch running full pipeline for ${checkboxes.length} submissions...`);
+    
+    let successCount = 0;
+    let failCount = 0;
+    
+    for (const cb of checkboxes) {
+        const subId = cb.value;
+        try {
+            const stageText = document.getElementById("ai-monitor-stage-text");
+            if(stageText) stageText.textContent = `Processing ${subId}... (Extract -> Grade)`;
+            const gradeResp = await fetch(`/api/submissions/${subId}/grade`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    vision_model: "qwen3.8:latest",
+                    reasoning_model: "qwen3.8:latest",
+                    use_two_stage: true
+                })
+            });
+            
+            if (!gradeResp.ok) throw new Error("Grading failed");
+            
+            if(stageText) stageText.textContent = `Processing ${subId}... (Direct Mark)`;
+            const markResp = await fetch(`/api/submissions/${subId}/direct-mark?vision_model=qwen3.8:latest`, {
+                method: "POST"
+            });
+            
+            if (!markResp.ok) throw new Error("Direct marking failed");
+            
+            successCount++;
+        } catch (e) {
+            console.error(`Failed processing submission ${subId}:`, e);
+            failCount++;
+        }
+    }
+    
+    stopAiLiveMonitor(failCount === 0, `Batch pipeline complete. Success: ${successCount}, Failed: ${failCount}`);
+    loadDashboardData();
+    loadSubmissionsQueue();
+}

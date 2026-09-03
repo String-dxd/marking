@@ -202,7 +202,7 @@ TABULAR DATA & GRAPH EVALUATION PROTOCOLS:
 
 2. GRAPH & PLOT EVALUATION PROTOCOL:
    - Structured Parse Format:
-     [Graph: X-axis="<Label & Unit>" (Scale: <Range>), Y-axis="<Label & Unit>" (Scale: <Range>), Plotted Points: [(x1, y1), (x2, y2), ...] (Total N points), Line: "<Detailed description: state if it's a best fit line, ONE straight line through all points, straight line segments connecting subsequent points, or a smooth curve. Explicitly note if drawn with a ruler, if smooth, if branched/hairy (sketched), and if it passes through origin (0,0)>", Gradient: "<Triangle coordinates & slope calculation>"]
+     [Graph: X-axis="<Label & Unit>" (Scale: <Range>), Y-axis="<Label & Unit>" (Scale: <Range>), Plotted Points: [(x1, y1), (x2, y2), ...] (Total N points), Line: "<Detailed description: CAREFULLY TRACE the line between each point. If the slope changes (dot-to-dot), state 'straight line segments connecting subsequent points'. Otherwise state if it's a best fit line, ONE straight line through all points, or a smooth curve. Explicitly note if drawn with a ruler, if smooth, if branched/hairy (sketched), and if it passes through origin (0,0)>", Gradient: "<Triangle coordinates & slope calculation>"]
    - Marking Scheme Alignment (Standard 4 Criteria):
      1. Axes & Scale: Correct quantity labels, units, and uniform linear scale covering >=50% of grid.
      2. Plotting Accuracy: Point-by-point coordinate comparison with ±0.5 small square allowable tolerance.
@@ -223,7 +223,7 @@ CRITICAL EXTRACTION & SPATIAL BOUNDING RULES:
 3. GRAPH WORK EXTRACTION:
    - Read actual handwritten axis numbers directly from the grid (DO NOT copy printed prompt tables).
    - Transcribe:
-     [Graph: X-axis="<Label & Unit>" (Scale: <Range>), Y-axis="<Label & Unit>" (Scale: <Range>), Plotted Points: [(x1, y1), (x2, y2), ...] (Total N points), Line: "<Detailed description: state if it's a best fit line, ONE straight line through all points, straight line segments connecting subsequent points, or a smooth curve. Explicitly note if drawn with a ruler, if smooth, if branched/hairy (sketched), and if it passes through origin (0,0)>", Gradient: "<Triangle coordinates & calculation>"]
+     [Graph: X-axis="<Label & Unit>" (Scale: <Range>), Y-axis="<Label & Unit>" (Scale: <Range>), Plotted Points: [(x1, y1), (x2, y2), ...] (Total N points), Line: "<Detailed description: CAREFULLY TRACE the line between each point. If the slope changes (dot-to-dot), state 'straight line segments connecting subsequent points'. Otherwise state if it's a best fit line, ONE straight line through all points, or a smooth curve. Explicitly note if drawn with a ruler, if smooth, if branched/hairy (sketched), and if it passes through origin (0,0)>", Gradient: "<Triangle coordinates & calculation>"]
 4. FILL-IN-THE-BLANKS & MEASUREMENTS:
    - Transcribe the exact handwritten value and unit written in answer spaces.
 5. DIAGRAMS & CALLOUT TRACEBACK:
@@ -491,7 +491,7 @@ CRITICAL RULES:
      * Do NOT copy the table's expected numbers (e.g. 24, 30, 36). Transcribe the actual grid intersections marked (e.g. (1, 2), (2, 3), (3, 3.6)...).
      * If the student omitted a data point (e.g. t=0) or started the line from origin (0,0), explicitly note it.
    - Transcribe graph format strictly as:
-     Question <No>: [Graph: X-axis="<Label & Unit>" (Scale: <Handwritten Scale>), Y-axis="<Label & Unit>" (Scale: <Handwritten Scale>), Plotted Points: [(x1, y1), (x2, y2)...] (Total N points), Line: "<Detailed description: state if it's a best fit line, ONE straight line through all points, straight line segments connecting subsequent points, or a smooth curve. Explicitly note if drawn with a ruler, if smooth, if branched/hairy (sketched), and if it passes through origin (0,0)>"]
+     Question <No>: [Graph: X-axis="<Label & Unit>" (Scale: <Handwritten Scale>), Y-axis="<Label & Unit>" (Scale: <Handwritten Scale>), Plotted Points: [(x1, y1), (x2, y2)...] (Total N points), Line: "<Detailed description: CAREFULLY TRACE the line between each point. If the slope changes (dot-to-dot), state 'straight line segments connecting subsequent points'. Otherwise state if it's a best fit line, ONE straight line through all points, or a smooth curve. Explicitly note if drawn with a ruler, if smooth, if branched/hairy (sketched), and if it passes through origin (0,0)>"]
 3. TABULAR DATA:
    - Transcribe student filled-in cells row-by-row into:
      Question <No>: [Table: Header=["<Col1>", "<Col2>", ...], Rows=[["<Val1>", "<Val2>", ...], ...]]
