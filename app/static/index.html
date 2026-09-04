@@ -139,7 +139,7 @@
                 <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-sm flex flex-col">
                     <div class="flex items-center justify-between mb-4">
                         <h3 class="font-bold text-white text-base">Ready for Review</h3>
-                        <span class="text-xs text-indigo-400 hover:underline cursor-pointer" onclick="switchTab('review')">View All</span>
+                        <span class="text-xs text-indigo-400 hover:underline cursor-pointer" onclick="switchTab('review'); loadReviewTab(null, true);">View All</span>
                     </div>
                     <div id="quick-review-list" class="space-y-3 flex-1 overflow-y-auto pr-1 max-h-64">
                         <!-- Populated by JS -->
@@ -296,15 +296,58 @@
             </div>
         </section>
 
-        <!-- 4. SPLIT-SCREEN REVIEW & APPROVAL VIEW -->
-        <section id="view-review" class="tab-view max-w-[1600px] mx-auto space-y-2.5 hidden h-[calc(100vh-115px)] md:h-[calc(100vh-100px)] flex flex-col">
+        <!-- 4. REVIEW & APPROVAL VIEW -->
+        <section id="view-review" class="tab-view max-w-[1600px] mx-auto hidden">
             
-            <!-- Student Submissions Navigation Bar across the entire class batch -->
-            <div class="bg-slate-900 border border-slate-800 rounded-2xl px-3 md:px-4 py-2 flex flex-wrap items-center justify-between gap-2.5 shrink-0 shadow-sm">
-                <div class="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-start">
-                    <button type="button" onclick="prevStudentSubmission()" id="btn-prev-student" title="Previous Student Script (Alt + Left)" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold flex items-center gap-1 transition-all disabled:opacity-40 disabled:cursor-not-allowed">
-                        <i data-lucide="chevron-left" class="w-3.5 h-3.5"></i> Prev
-                    </button>
+            <!-- 4A. YET-TO-BE-APPROVED ASSIGNMENTS LIST VIEW -->
+            <div id="review-assignment-list-view" class="space-y-6">
+                <div class="flex items-center justify-between flex-wrap gap-4">
+                    <div>
+                        <div class="flex items-center gap-3">
+                            <h2 class="text-xl font-bold text-white">Review & Approval Queue</h2>
+                            <span id="review-queue-badge" class="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                                Loading queue...
+                            </span>
+                        </div>
+                        <p class="text-xs text-slate-400 mt-1">Select an assignment below to review and approve student submissions.</p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button type="button" onclick="loadReviewAssignmentsList()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5">
+                            <i data-lucide="refresh-cw" class="w-3.5 h-3.5 text-slate-400"></i> Refresh
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Active Assignments Awaiting Review Grid -->
+                <div id="review-assignments-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                    <!-- Populated dynamically by JS -->
+                </div>
+
+                <!-- Secondary Section: Completed Assignments (100% Approved) -->
+                <div id="review-completed-assignments-section" class="hidden pt-6 border-t border-slate-800">
+                    <h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                        <i data-lucide="check-circle-2" class="w-4 h-4 text-emerald-400"></i> Completed Assignments (100% Approved)
+                    </h3>
+                    <div id="review-completed-assignments-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        <!-- Populated dynamically by JS -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- 4B. SPLIT-SCREEN REVIEW & APPROVAL STATION -->
+            <div id="review-station-view" class="hidden space-y-2.5 h-[calc(100vh-115px)] md:h-[calc(100vh-100px)] flex flex-col">
+                
+                <!-- Student Submissions Navigation Bar across the entire class batch -->
+                <div class="bg-slate-900 border border-slate-800 rounded-2xl px-3 md:px-4 py-2 flex flex-wrap items-center justify-between gap-2.5 shrink-0 shadow-sm">
+                    <div class="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-start">
+                        <!-- Back to Assignments List Button -->
+                        <button type="button" onclick="showReviewAssignmentList()" title="Back to Assignments Review Queue" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shrink-0 shadow-sm">
+                            <i data-lucide="arrow-left" class="w-3.5 h-3.5 text-indigo-400"></i> <span class="hidden sm:inline">Assignments</span>
+                        </button>
+
+                        <button type="button" onclick="prevStudentSubmission()" id="btn-prev-student" title="Previous Student Script (Alt + Left)" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold flex items-center gap-1 transition-all disabled:opacity-40 disabled:cursor-not-allowed">
+                            <i data-lucide="chevron-left" class="w-3.5 h-3.5"></i> Prev
+                        </button>
 
                     <div class="flex items-center gap-1.5 bg-slate-950 px-2.5 py-1 rounded-xl border border-slate-800 flex-1 sm:flex-initial justify-center">
                         <select id="review-student-selector" onchange="openReviewForSubmission(this.value)" class="bg-slate-900 border border-indigo-700/60 rounded-lg px-2 py-1 text-xs font-bold text-white focus:outline-none focus:border-indigo-500 max-w-[150px] sm:max-w-[200px] truncate">
@@ -319,7 +362,13 @@
                 </div>
 
                 <div class="flex items-center gap-2.5 text-[11px] md:text-xs text-slate-400 w-full sm:w-auto justify-between sm:justify-end border-t sm:border-t-0 pt-1 sm:pt-0 border-slate-800/80">
-                    <span class="truncate max-w-[160px] sm:max-w-none">Task: <b class="text-white font-bold" id="review-assignment-title">Loading...</b></span>
+                    <div class="flex items-center gap-1.5">
+                        <span class="text-slate-400 font-medium">Task:</span>
+                        <select id="review-assignment-selector" onchange="switchReviewAssignment(this.value)" class="bg-slate-900 border border-indigo-700/60 rounded-lg px-2 py-1 text-xs font-bold text-white focus:outline-none focus:border-indigo-500 max-w-[170px] sm:max-w-[220px] truncate" title="Switch Assignment to Review">
+                            <option value="" disabled selected>Loading...</option>
+                        </select>
+                        <b class="text-white font-bold hidden" id="review-assignment-title">Loading...</b>
+                    </div>
                     <span class="text-slate-600">•</span>
                     <span class="text-emerald-400 font-bold" id="review-class-progress-badge">0/0 Approved</span>
                 </div>
@@ -547,6 +596,7 @@
                     </div>
                 </div>
 
+            </div>
             </div>
         </section>
 
@@ -1027,7 +1077,7 @@
     </nav>
 
     <!-- Scripts -->
-    <script src="/static/js/app.js?v=4.9"></script>
+    <script src="/static/js/app.js?v=5.0"></script>
     <script>
         lucide.createIcons();
     </script>

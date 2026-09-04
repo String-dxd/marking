@@ -32,7 +32,7 @@ document.addEventListener("DOMContentLoaded", () => {
 // Tab Navigation
 let currentReviewMobileView = 'doc';
 
-function switchTab(tabName) {
+function switchTab(tabName, preserveReviewStation = false) {
     document.querySelectorAll(".tab-view").forEach(el => el.classList.add("hidden"));
     document.querySelectorAll(".tab-btn").forEach(el => el.classList.remove("active"));
     document.querySelectorAll(".mobile-nav-btn").forEach(el => {
@@ -55,8 +55,12 @@ function switchTab(tabName) {
     if (tabName === "assignments") loadAssignments();
     if (tabName === "processing") loadSubmissionsQueue();
     if (tabName === "students") loadStudentsRoster();
-    if (tabName === "review" && window.innerWidth < 1024) {
-        switchReviewMobileView(currentReviewMobileView || 'doc');
+    if (tabName === "review") {
+        if (!preserveReviewStation) {
+            showReviewAssignmentList();
+        } else if (window.innerWidth < 1024) {
+            switchReviewMobileView(currentReviewMobileView || 'doc');
+        }
     }
     
     lucide.createIcons();
@@ -198,13 +202,18 @@ async function loadQuickReviewQueue() {
         const statPending = document.getElementById("stat-pending");
         if (statPending) statPending.textContent = pendingSubs.length;
         const reviewBadge = document.getElementById("review-pending-badge");
-        if (reviewBadge) {
-            if (pendingSubs.length > 0) {
+        const mobileReviewBadge = document.getElementById("mobile-review-pending-badge");
+        if (pendingSubs.length > 0) {
+            if (reviewBadge) {
                 reviewBadge.textContent = pendingSubs.length;
                 reviewBadge.classList.remove("hidden");
-            } else {
-                reviewBadge.classList.add("hidden");
             }
+            if (mobileReviewBadge) {
+                mobileReviewBadge.classList.remove("hidden");
+            }
+        } else {
+            if (reviewBadge) reviewBadge.classList.add("hidden");
+            if (mobileReviewBadge) mobileReviewBadge.classList.add("hidden");
         }
         
         if (pendingSubs.length === 0) {
@@ -342,6 +351,9 @@ async function loadAssignments(fetchFromApi = true) {
                             <span class="text-slate-400">Marked: <b class="text-emerald-400">${a.approved_count}</b>/${a.submission_count}</span>
                         </div>
                         <div class="flex items-center gap-1">
+                            <button onclick="openReviewForAssignment(${a.id}, event)" title="Review submissions for this assignment" class="px-2 py-1 bg-indigo-600/30 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/40 rounded-lg text-xs font-medium flex items-center gap-1 transition-all">
+                                <i data-lucide="check-check" class="w-3.5 h-3.5"></i> Review
+                            </button>
                             <button onclick="openEditAssignmentModal(${a.id}, event)" title="Edit Assignment & Rubrics" class="p-1.5 text-slate-400 hover:text-indigo-400 hover:bg-indigo-950/50 rounded-lg transition-all">
                                 <i data-lucide="edit-3" class="w-4 h-4"></i>
                             </button>
@@ -855,10 +867,372 @@ function refreshSubmissionsQueue() {
 
 let currentAssignmentSubmissions = [];
 let currentSubmissionIndex = -1;
+let isLoadingReviewTab = false;
+
+function showReviewAssignmentList() {
+    const listView = document.getElementById("review-assignment-list-view");
+    const stationView = document.getElementById("review-station-view");
+    if (listView) listView.classList.remove("hidden");
+    if (stationView) stationView.classList.add("hidden");
+    
+    loadReviewAssignmentsList();
+}
+
+async function loadReviewAssignmentsList() {
+    const listView = document.getElementById("review-assignment-list-view");
+    const stationView = document.getElementById("review-station-view");
+    if (listView) listView.classList.remove("hidden");
+    if (stationView) stationView.classList.add("hidden");
+    
+    const grid = document.getElementById("review-assignments-grid");
+    const queueBadge = document.getElementById("review-queue-badge");
+    const completedSection = document.getElementById("review-completed-assignments-section");
+    const completedGrid = document.getElementById("review-completed-assignments-grid");
+    
+    if (grid) {
+        grid.innerHTML = `
+            <div class="col-span-full py-12 text-center bg-slate-900/40 border border-slate-800 rounded-2xl">
+                <div class="w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
+                <p class="text-xs text-slate-400">Loading assignments awaiting review...</p>
+            </div>
+        `;
+    }
+    
+    try {
+        const resp = await fetch("/api/assignments");
+        const assignments = await resp.json();
+        
+        if (!assignments || assignments.length === 0) {
+            if (queueBadge) {
+                queueBadge.textContent = "0 Assignments";
+                queueBadge.className = "px-2.5 py-0.5 rounded-full text-xs font-bold bg-slate-800 text-slate-400 border border-slate-700";
+            }
+            if (grid) {
+                grid.innerHTML = `
+                    <div class="col-span-full py-12 text-center bg-slate-900/60 border border-slate-800 rounded-2xl">
+                        <i data-lucide="inbox" class="w-12 h-12 text-slate-600 mx-auto mb-3"></i>
+                        <h3 class="text-sm font-bold text-slate-300">No Assignments Found</h3>
+                        <p class="text-xs text-slate-500 mt-1 mb-4">Create an assignment and upload student scripts to begin reviewing.</p>
+                        <button onclick="switchTab('assignments')" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition-all">Go to Assignments</button>
+                    </div>
+                `;
+            }
+            if (completedSection) completedSection.classList.add("hidden");
+            if (window.lucide) lucide.createIcons();
+            return;
+        }
+        
+        // Fetch submissions count and details for each assignment in parallel
+        const assignmentsWithStats = await Promise.all(assignments.map(async (a) => {
+            try {
+                const sResp = await fetch(`/api/submissions/assignment/${a.id}`);
+                const subs = await sResp.json();
+                const total = subs.length;
+                const approved = subs.filter(s => s.status === 'approved').length;
+                const pending = total - approved;
+                const reviewReady = subs.filter(s => s.status === 'review_ready').length;
+                return {
+                    ...a,
+                    total_submissions: total,
+                    approved_submissions: approved,
+                    pending_submissions: pending,
+                    review_ready_submissions: reviewReady
+                };
+            } catch(e) {
+                return {
+                    ...a,
+                    total_submissions: a.submission_count || 0,
+                    approved_submissions: a.approved_count || 0,
+                    pending_submissions: (a.submission_count || 0) - (a.approved_count || 0),
+                    review_ready_submissions: 0
+                };
+            }
+        }));
+        
+        const pendingAssignments = assignmentsWithStats.filter(a => a.pending_submissions > 0);
+        const completedAssignments = assignmentsWithStats.filter(a => a.total_submissions > 0 && a.pending_submissions === 0);
+        const emptyAssignments = assignmentsWithStats.filter(a => a.total_submissions === 0);
+        
+        const totalPendingWork = pendingAssignments.reduce((acc, a) => acc + a.pending_submissions, 0);
+        
+        if (queueBadge) {
+            if (pendingAssignments.length > 0) {
+                queueBadge.textContent = `${pendingAssignments.length} Assignment(s) • ${totalPendingWork} Scripts Awaiting Review`;
+                queueBadge.className = "px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30";
+            } else if (emptyAssignments.length > 0 && completedAssignments.length === 0) {
+                queueBadge.textContent = "No Submissions Ingested";
+                queueBadge.className = "px-2.5 py-0.5 rounded-full text-xs font-bold bg-slate-800 text-slate-400 border border-slate-700";
+            } else {
+                queueBadge.textContent = "All Caught Up 🎉";
+                queueBadge.className = "px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30";
+            }
+        }
+        
+        // Update top nav review badges
+        const reviewBadge = document.getElementById("review-pending-badge");
+        const mobileReviewBadge = document.getElementById("mobile-review-pending-badge");
+        if (totalPendingWork > 0) {
+            if (reviewBadge) { reviewBadge.textContent = totalPendingWork; reviewBadge.classList.remove("hidden"); }
+            if (mobileReviewBadge) mobileReviewBadge.classList.remove("hidden");
+        } else {
+            if (reviewBadge) reviewBadge.classList.add("hidden");
+            if (mobileReviewBadge) mobileReviewBadge.classList.add("hidden");
+        }
+        
+        if (pendingAssignments.length === 0) {
+            if (emptyAssignments.length > 0 && completedAssignments.length === 0) {
+                grid.innerHTML = `
+                    <div class="col-span-full py-12 text-center bg-slate-900/60 border border-slate-800 rounded-2xl p-6">
+                        <i data-lucide="scan-line" class="w-12 h-12 text-slate-600 mx-auto mb-3"></i>
+                        <h3 class="text-base font-bold text-white">No Student Scripts Uploaded Yet</h3>
+                        <p class="text-xs text-slate-400 mt-1 max-w-md mx-auto">You have ${emptyAssignments.length} assignment(s) created, but no student scans have been ingested yet.</p>
+                        <button onclick="switchTab('processing')" class="mt-4 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition-all">Go to Upload & Processing</button>
+                    </div>
+                `;
+            } else {
+                grid.innerHTML = `
+                    <div class="col-span-full py-10 text-center bg-slate-900/60 border border-slate-800 rounded-2xl p-6">
+                        <div class="w-12 h-12 bg-emerald-950/60 text-emerald-400 border border-emerald-800/80 rounded-2xl flex items-center justify-center mx-auto mb-3">
+                            <i data-lucide="check-check" class="w-6 h-6"></i>
+                        </div>
+                        <h3 class="text-base font-bold text-white">All Assignments Reviewed!</h3>
+                        <p class="text-xs text-slate-400 mt-1 max-w-md mx-auto">There are no student submissions currently awaiting your review. Great work!</p>
+                    </div>
+                `;
+            }
+        } else {
+            grid.innerHTML = pendingAssignments.map(a => {
+                const pct = a.total_submissions > 0 ? Math.round((a.approved_submissions / a.total_submissions) * 100) : 0;
+                return `
+                    <div onclick="openReviewForAssignment(${a.id})" class="bg-slate-900/90 border border-slate-800 hover:border-indigo-500/70 hover:bg-slate-900 rounded-2xl p-5 cursor-pointer transition-all flex flex-col justify-between group shadow-sm hover:shadow-indigo-500/10 hover:shadow-lg relative">
+                        <div class="space-y-3">
+                            <div class="flex items-start justify-between gap-2">
+                                <div class="flex items-center gap-2">
+                                    <span class="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-indigo-950 text-indigo-400 border border-indigo-800">${escapeHtml(a.subject || 'General')}</span>
+                                    <span class="text-xs text-slate-400 font-medium">${escapeHtml(a.class_name || 'General')}</span>
+                                </div>
+                                <span class="text-xs px-2.5 py-0.5 rounded-full font-bold bg-amber-950 text-amber-300 border border-amber-800/80 flex items-center gap-1 shrink-0">
+                                    <span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping"></span>
+                                    ${a.pending_submissions} to review
+                                </span>
+                            </div>
+                            
+                            <div>
+                                <h3 class="text-base font-bold text-white group-hover:text-indigo-300 transition-colors">${escapeHtml(a.title)}</h3>
+                                <p class="text-xs text-slate-400 mt-1 line-clamp-2">${escapeHtml(a.marking_scheme_text || 'No marking scheme details provided.')}</p>
+                            </div>
+                            
+                            <!-- Progress Bar -->
+                            <div class="space-y-1.5 pt-1">
+                                <div class="flex justify-between text-[11px]">
+                                    <span class="text-slate-400 font-medium">Review Progress</span>
+                                    <span class="text-slate-300 font-bold">${a.approved_submissions} / ${a.total_submissions} (${pct}%)</span>
+                                </div>
+                                <div class="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800">
+                                    <div class="bg-gradient-to-r from-indigo-500 to-emerald-500 h-2 rounded-full transition-all duration-300" style="width: ${pct}%"></div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="pt-4 mt-4 border-t border-slate-800/80 flex items-center justify-between">
+                            <div class="text-[11px] text-slate-400">
+                                Max Marks: <b class="text-white">${a.max_marks}</b>
+                            </div>
+                            <button onclick="event.stopPropagation(); openReviewForAssignment(${a.id})" class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-md shadow-indigo-600/20">
+                                Review Assignment <i data-lucide="arrow-right" class="w-3.5 h-3.5"></i>
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }).join("");
+        }
+        
+        // Render completed assignments section if any exist
+        if (completedSection && completedGrid) {
+            if (completedAssignments.length > 0) {
+                completedSection.classList.remove("hidden");
+                completedGrid.innerHTML = completedAssignments.map(a => `
+                    <div onclick="openReviewForAssignment(${a.id})" class="bg-slate-950/70 border border-slate-800 hover:border-slate-700 rounded-xl p-4 cursor-pointer transition-all flex items-center justify-between group">
+                        <div class="min-w-0 flex-1 pr-3">
+                            <div class="flex items-center gap-2 mb-1">
+                                <span class="text-[10px] px-1.5 py-0.2 rounded bg-slate-900 text-slate-400 border border-slate-800">${escapeHtml(a.subject || 'General')}</span>
+                                <span class="text-xs text-slate-500">${escapeHtml(a.class_name || 'General')}</span>
+                            </div>
+                            <h4 class="text-xs font-bold text-slate-200 group-hover:text-white truncate">${escapeHtml(a.title)}</h4>
+                            <span class="text-[11px] text-emerald-400 font-semibold flex items-center gap-1 mt-0.5">
+                                <i data-lucide="check" class="w-3 h-3"></i> ${a.approved_submissions} / ${a.total_submissions} Approved (100%)
+                            </span>
+                        </div>
+                        <button onclick="event.stopPropagation(); openReviewForAssignment(${a.id})" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium shrink-0">
+                            View
+                        </button>
+                    </div>
+                `).join("");
+            } else {
+                completedSection.classList.add("hidden");
+            }
+        }
+        
+        if (window.lucide) lucide.createIcons();
+    } catch (e) {
+        console.error("Error loading review assignments list", e);
+        if (grid) grid.innerHTML = `<div class="col-span-full py-6 text-center text-xs text-rose-400">Failed to load review queue. Please try refreshing.</div>`;
+    }
+}
+
+async function loadReviewTab(targetSubmissionId = null, preferPending = false) {
+    if (isLoadingReviewTab) return;
+    
+    if (window.innerWidth < 1024) {
+        switchReviewMobileView(currentReviewMobileView || 'doc');
+    }
+    
+    if (targetSubmissionId) {
+        await openReviewForSubmission(targetSubmissionId);
+        return;
+    }
+    
+    // If a submission is already loaded and valid, and not forcing a jump to pending
+    if (currentSubmission && currentSubmission.id) {
+        if (!preferPending || currentSubmission.status !== 'approved') {
+            await populateReviewAssignmentSelector(currentSubmission.assignment_id);
+            return;
+        }
+    }
+    
+    // Default to the list view if no submission is currently active
+    showReviewAssignmentList();
+}
+
+async function openReviewForAssignment(assignmentId, event) {
+    if (event) event.stopPropagation();
+    
+    // Switch to split-screen station view
+    const listView = document.getElementById("review-assignment-list-view");
+    const stationView = document.getElementById("review-station-view");
+    if (listView) listView.classList.add("hidden");
+    if (stationView) stationView.classList.remove("hidden");
+    
+    switchTab("review", true);
+    
+    if (window.innerWidth < 1024) {
+        switchReviewMobileView(currentReviewMobileView || 'doc');
+    }
+    
+    await switchReviewAssignment(assignmentId);
+}
+
+async function switchReviewAssignment(assignmentId) {
+    if (!assignmentId) return;
+    const prevLoading = isLoadingReviewTab;
+    isLoadingReviewTab = true;
+    try {
+        const resp = await fetch(`/api/submissions/assignment/${assignmentId}`);
+        const subs = await resp.json();
+        
+        await populateReviewAssignmentSelector(Number(assignmentId));
+        
+        if (!subs || subs.length === 0) {
+            showReviewEmptyState("No student submissions uploaded yet for this assignment.");
+            const assignSelector = document.getElementById("review-assignment-selector");
+            if (assignSelector) assignSelector.value = assignmentId;
+            return;
+        }
+        
+        const targetSub = subs.find(s => s.status !== "approved") || subs[0];
+        await openReviewForSubmission(targetSub.id);
+    } catch (err) {
+        console.error("Failed to switch assignment in review", err);
+    } finally {
+        isLoadingReviewTab = prevLoading;
+    }
+}
+
+async function populateReviewAssignmentSelector(selectedAssignmentId = null) {
+    const selector = document.getElementById("review-assignment-selector");
+    if (!selector) return;
+    
+    try {
+        const resp = await fetch("/api/assignments");
+        const assignments = await resp.json();
+        
+        if (!assignments || assignments.length === 0) {
+            selector.innerHTML = `<option value="" disabled selected>(No assignments)</option>`;
+            return;
+        }
+        
+        const targetId = selectedAssignmentId || (currentSubmission ? currentSubmission.assignment_id : null) || assignments[0].id;
+        selector.innerHTML = assignments.map(a => {
+            const isSel = (a.id == targetId);
+            return `<option value="${a.id}" ${isSel ? 'selected' : ''}>${escapeHtml(a.title)} (${escapeHtml(a.class_name || 'General')})</option>`;
+        }).join("");
+        
+        selector.value = targetId;
+    } catch (e) {
+        console.error("Failed to populate review assignment selector", e);
+    }
+}
+
+function showReviewEmptyState(message = "No student submissions available for review.") {
+    const assignTitle = document.getElementById("review-assignment-title");
+    if (assignTitle) assignTitle.textContent = "No Submissions";
+    
+    const selector = document.getElementById("review-student-selector");
+    if (selector) selector.innerHTML = `<option value="" disabled selected>(No submissions)</option>`;
+    
+    const counterBadge = document.getElementById("review-student-counter-badge");
+    if (counterBadge) counterBadge.textContent = "0 / 0";
+    
+    const progressBadge = document.getElementById("review-class-progress-badge");
+    if (progressBadge) progressBadge.textContent = "0 / 0 Approved";
+    
+    const btnPrev = document.getElementById("btn-prev-student");
+    const btnNext = document.getElementById("btn-next-student");
+    if (btnPrev) btnPrev.disabled = true;
+    if (btnNext) btnNext.disabled = true;
+    
+    const nameInput = document.getElementById("review-edit-student-name");
+    if (nameInput) nameInput.value = "";
+    
+    const statusBadge = document.getElementById("review-status-badge");
+    if (statusBadge) {
+        statusBadge.textContent = "EMPTY";
+        statusBadge.className = "text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 font-medium shrink-0";
+    }
+    
+    const thumbs = document.getElementById("thumbnails-strip");
+    if (thumbs) thumbs.innerHTML = `<div class="text-xs text-slate-500 py-2 px-3">${escapeHtml(message)}</div>`;
+    
+    const mainImg = document.getElementById("main-scan-img");
+    if (mainImg) mainImg.src = "";
+    
+    const svgOverlay = document.getElementById("direct-marking-svg");
+    if (svgOverlay) svgOverlay.innerHTML = "";
+    
+    const qContainer = document.getElementById("questions-container");
+    if (qContainer) {
+        qContainer.innerHTML = `
+            <div class="py-12 px-4 text-center bg-slate-950/60 border border-slate-800 rounded-2xl">
+                <i data-lucide="inbox" class="w-10 h-10 text-slate-600 mx-auto mb-3"></i>
+                <h4 class="text-sm font-bold text-slate-300">Review Queue Empty</h4>
+                <p class="text-xs text-slate-500 mt-1 max-w-sm mx-auto">${escapeHtml(message)}</p>
+            </div>
+        `;
+    }
+    if (window.lucide) lucide.createIcons();
+}
 
 // 4. Split-Screen Review Station & Student Identity Highlighting
 async function openReviewForSubmission(submissionId) {
-    switchTab("review");
+    const listView = document.getElementById("review-assignment-list-view");
+    const stationView = document.getElementById("review-station-view");
+    if (listView) listView.classList.add("hidden");
+    if (stationView) stationView.classList.remove("hidden");
+    
+    switchTab("review", true);
+    
+    const prevLoading = isLoadingReviewTab;
+    isLoadingReviewTab = true;
     
     try {
         const resp = await fetch(`/api/submissions/${submissionId}`);
@@ -913,6 +1287,8 @@ async function openReviewForSubmission(submissionId) {
         renderGradingFields();
     } catch (e) {
         alert("Failed to load submission details: " + e.message);
+    } finally {
+        isLoadingReviewTab = prevLoading;
     }
 }
 
@@ -927,6 +1303,7 @@ function updateBatchNavigationUI() {
     const btnPrev = document.getElementById("btn-prev-student");
     const btnNext = document.getElementById("btn-next-student");
     const assignTitle = document.getElementById("review-assignment-title");
+    const assignSelector = document.getElementById("review-assignment-selector");
     const progressBadge = document.getElementById("review-class-progress-badge");
     
     const totalCount = currentAssignmentSubmissions.length;
@@ -934,6 +1311,9 @@ function updateBatchNavigationUI() {
     
     if (counterBadge) counterBadge.textContent = `${currentNum} / ${totalCount}`;
     if (assignTitle) assignTitle.textContent = currentSubmission.assignment_title || "Assignment";
+    if (assignSelector && currentSubmission && currentSubmission.assignment_id) {
+        assignSelector.value = currentSubmission.assignment_id;
+    }
     
     const approvedCount = currentAssignmentSubmissions.filter(s => s.status === 'approved').length;
     if (progressBadge) progressBadge.textContent = `${approvedCount} / ${totalCount} Approved`;
@@ -2108,7 +2488,7 @@ async function deleteCurrentSubmission() {
                 const nextIndex = Math.min(currentSubmissionIndex, remaining.length - 1);
                 openReviewForSubmission(remaining[nextIndex].id);
             } else {
-                switchTab("processing");
+                showReviewAssignmentList();
             }
         } else {
             alert("Error deleting submission: " + (data.detail || data.error || "Unknown error"));
