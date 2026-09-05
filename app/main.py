@@ -61,3 +61,11 @@ def serve_index():
         return FileResponse(index_file)
     return {"message": "Tallus API is running."}
 
+@app.get("/favicon.ico", include_in_schema=False)
+def serve_favicon():
+    favicon_file = static_dir / "favicon.ico"
+    if favicon_file.exists():
+        return FileResponse(favicon_file, headers={"Cache-Control": "no-cache, must-revalidate"})
+    return FileResponse(static_dir / "logo.png")
+
+
