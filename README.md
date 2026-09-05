@@ -52,7 +52,7 @@ ollama run qwen3.8:latest
 \\\
 
 ### 2. Launch the Application
-- **Standard Local/LAN Mode**: Run python run.py or double-click start.bat.
+- **Standard Local/LAN Mode**: Run python run.py or double-click tallus.bat (or the Tallus shortcut / tallus.exe).
 - **Mobile HTTPS Mode (Cloudflare Tunnel + QR Code)**: Run python run.py --tunnel or double-click start_mobile_https.bat.
   - Automatically provisions a trusted https://*.trycloudflare.com URL.
   - Displays a scannable ASCII QR code in the terminal for instant mobile phone access and camera uploads.
@@ -128,6 +128,6 @@ Tallus/
 │   └── main.py                  # FastAPI application entrypoint
 ├── tests/                       # Unit & integration tests
 ├── run.py                       # Python launch script with auto-browser opening
-├── start.bat                    # One-click Windows launcher
+├── tallus.bat                   # One-click Windows launcher (or Tallus.lnk / tallus.exe)
 └── requirements.txt             # Python dependencies
 \\\
