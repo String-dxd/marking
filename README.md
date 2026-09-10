@@ -8,8 +8,7 @@
 [![Vite](https://img.shields.io/badge/Vite-8.2-646CFF?logo=vite&logoColor=white)](https://vite.dev/)
 [![Tailwind CSS v4](https://img.shields.io/badge/Tailwind_CSS-v4.3-06B6D4?logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
 [![100% Client-Side](https://img.shields.io/badge/Architecture-100%25_Client--Side-10B981)](./docs/USER_GUIDE.md)
-[![PDPA Ready](https://img.shields.io/badge/Data_Privacy-PDPA_Compliant-059669)](./docs/USER_GUIDE.md)
-[![Zero Backend](https://img.shields.io/badge/Backend-None_(Zero_Egress)-6366F1)](./docs/USER_GUIDE.md)
+
 
 ---
 
