@@ -31,7 +31,7 @@
 - [Repository Structure](#-repository-structure)
 - [Technology Stack](#-technology-stack)
 - [Documentation & Resources](#-documentation--resources)
-- [License](#-license)
+
 
 ---
 
@@ -272,8 +272,4 @@ Plexo is intentionally architected to operate with **zero telemetry, zero cookie
 
 ---
 
-## 📄 License
 
-Distributed for educational and school operational use. See repository for details.
-
-Developed with ❤️ for Singapore School Examination Committees.
