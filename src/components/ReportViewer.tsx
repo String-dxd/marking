@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useExamStore } from '../store/useExamStore';
 import { getCandidatePaperArrangement } from '../types';
 import type { ExamPaper } from '../types';
+import { arePapersConcurrent } from '../services/allocationEngine';
 import { 
   Printer, 
   Download, 
@@ -10,7 +11,7 @@ import {
   Calendar, 
   DoorOpen, 
   Building2, 
-  Monitor,
+  Monitor, 
   Ban
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
@@ -92,6 +93,18 @@ export const ReportViewer: React.FC = () => {
     if (!currentPaper) return [];
     return allocations[currentPaper.id] || [];
   }, [allocations, currentPaper]);
+
+  // Concurrent papers for currentPaper
+  const concurrentPapers = useMemo(() => {
+    if (!currentPaper) return [];
+    return papers.filter((p) => p.id !== currentPaper.id && arePapersConcurrent(p, currentPaper));
+  }, [papers, currentPaper]);
+
+  // Existing allocations for concurrent papers
+  const concurrentAllocations = useMemo(() => {
+    if (concurrentPapers.length === 0) return [];
+    return concurrentPapers.flatMap((p) => allocations[p.id] || []);
+  }, [concurrentPapers, allocations]);
 
   // Filter by venue if specific venue is chosen
   const filteredAllocations = useMemo(() => {
@@ -567,6 +580,15 @@ export const ReportViewer: React.FC = () => {
             ) : (
               doorCardVenues.map((v, vIdx) => {
                 const venueAllocs = currentAllocations.filter((a) => a.venueId === v.id);
+                const concurrentInRoom = concurrentAllocations.filter((a) => a.venueId === v.id);
+                const concurrentPapersInRoom = Array.from(
+                  new Set(
+                    concurrentInRoom
+                      .map((a) => papers.find((p) => p.id === a.paperId))
+                      .filter((p): p is ExamPaper => Boolean(p))
+                  )
+                );
+                const hasCombinedPapers = concurrentPapersInRoom.length > 0;
                 const dateDetails = formatExamDate(currentPaper.date);
 
                 return (
@@ -584,6 +606,11 @@ export const ReportViewer: React.FC = () => {
                           <span className="text-xs font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
                             {dateDetails.dayOfWeek}
                           </span>
+                          {hasCombinedPapers && (
+                            <span className="text-xs font-bold text-purple-700 bg-purple-50 px-2 py-0.5 rounded border border-purple-200">
+                              Combined Venue (+{concurrentPapersInRoom.map((p) => p.code).join(', ')})
+                            </span>
+                          )}
                         </div>
                         <h2 className="text-2xl font-black text-slate-900 mt-1">
                           {currentPaper.code} — {currentPaper.title}
@@ -597,7 +624,10 @@ export const ReportViewer: React.FC = () => {
                           <span>•</span>
                           <span>Venue: <strong className="text-indigo-900 text-sm font-black">{v.name}</strong></span>
                           <span>•</span>
-                          <span>Candidature: <strong>{venueAllocs.length} candidates</strong></span>
+                          <span>
+                            Candidature: <strong>{venueAllocs.length + concurrentInRoom.length} candidates</strong>
+                            {hasCombinedPapers && ` (${venueAllocs.length} for ${currentPaper.code}, ${concurrentInRoom.length} for ${concurrentPapersInRoom.map((p) => p.code).join('/')})`}
+                          </span>
                         </div>
                       </div>
                       <img src={plexoLogo} alt="Plexo" className="h-10 w-auto object-contain rounded" />
@@ -628,6 +658,16 @@ export const ReportViewer: React.FC = () => {
                               ? candidates.find((cand) => cand.id === alloc.candidateId)
                               : null;
 
+                            const concurrentAlloc = !alloc
+                              ? concurrentInRoom.find((a) => a.row === r && a.col === c)
+                              : null;
+                            const concurrentCand = concurrentAlloc
+                              ? candidates.find((cand) => cand.id === concurrentAlloc.candidateId)
+                              : null;
+                            const concurrentPaper = concurrentAlloc
+                              ? papers.find((p) => p.id === concurrentAlloc.paperId)
+                              : null;
+
                             if (!seat.isActive) {
                               return (
                                 <div
@@ -646,6 +686,8 @@ export const ReportViewer: React.FC = () => {
                                 className={`h-24 rounded-lg border p-2 flex flex-col justify-between select-none ${
                                   candidate
                                     ? 'bg-white border-slate-400 shadow-xs'
+                                    : concurrentAlloc
+                                    ? 'bg-purple-50/70 border-purple-300 shadow-xs'
                                     : 'bg-slate-50 border-dashed border-slate-300'
                                 }`}
                               >
@@ -654,11 +696,18 @@ export const ReportViewer: React.FC = () => {
                                   <span className="font-mono font-bold text-xs text-slate-600">
                                     {seat.seatLabel}
                                   </span>
-                                  {seat.hasComputer && (
-                                    <span title="Computer Workstation">
-                                      <Monitor className="w-3.5 h-3.5 text-sky-600" />
-                                    </span>
-                                  )}
+                                  <div className="flex items-center gap-1">
+                                    {seat.hasComputer && (
+                                      <span title="Computer Workstation">
+                                        <Monitor className="w-3.5 h-3.5 text-sky-600" />
+                                      </span>
+                                    )}
+                                    {concurrentAlloc && (
+                                      <span className="text-[8px] font-bold text-purple-700 bg-purple-100 px-1 rounded font-mono">
+                                        {concurrentPaper?.code}
+                                      </span>
+                                    )}
+                                  </div>
                                 </div>
 
                                 {/* ONLY Candidate Number (Strictly NO NAMES) */}
@@ -673,6 +722,15 @@ export const ReportViewer: React.FC = () => {
                                       </span>
                                     )}
                                   </div>
+                                ) : concurrentAlloc ? (
+                                  <div className="flex flex-col items-center justify-center my-auto">
+                                    <span className="font-mono font-black text-base text-purple-950 bg-purple-100 px-2 py-0.5 rounded border border-purple-300 tracking-wider">
+                                      {concurrentCand?.indexNumber || concurrentAlloc.candidateId}
+                                    </span>
+                                    <span className="text-[9px] font-bold text-purple-700 mt-0.5">
+                                      {concurrentPaper?.code}
+                                    </span>
+                                  </div>
                                 ) : (
                                   <div className="text-center py-2 text-[11px] text-slate-400 italic">
                                     Empty Desk
@@ -681,7 +739,11 @@ export const ReportViewer: React.FC = () => {
 
                                 {/* Bottom Subtle Arrangement Indicator (No names) */}
                                 <div className="text-[10px] text-center text-slate-500 border-t border-slate-100 pt-0.5">
-                                  {(() => {
+                                  {concurrentAlloc ? (
+                                    <span className="text-purple-700 font-bold font-mono text-[9px]">
+                                      {concurrentPaper?.code}
+                                    </span>
+                                  ) : (() => {
                                     if (!candidate) return <span className="opacity-0">—</span>;
                                     const arr = getCandidatePaperArrangement(candidate, currentPaper?.code);
                                     if (arr && ((arr.extraTimePct ?? 0) > 0 || arr.frontSeatMobility || arr.needsSeparateRoom)) {

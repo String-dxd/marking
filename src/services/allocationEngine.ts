@@ -33,6 +33,22 @@ function isBackToBack(precedingPaper: ExamPaper, currentPaper: ExamPaper): boole
   return gap >= 0 && gap <= 60;
 }
 
+/**
+ * Checks if two papers happen during overlapping duration on the same day.
+ */
+export function arePapersConcurrent(paperA: ExamPaper, paperB: ExamPaper): boolean {
+  if (paperA.id === paperB.id) return false;
+  if (paperA.date !== paperB.date) return false;
+
+  const startA = parseTimeToMinutes(paperA.startTime);
+  const endA = startA + (paperA.durationMins || 60);
+
+  const startB = parseTimeToMinutes(paperB.startTime);
+  const endB = startB + (paperB.durationMins || 60);
+
+  return startA < endB && startB < endA;
+}
+
 export function runDeterministicAllocation(
   targetPaper: ExamPaper,
   allCandidates: Candidate[],
@@ -62,6 +78,26 @@ export function runDeterministicAllocation(
     a.indexNumber.localeCompare(b.indexNumber)
   );
 
+  // Identify Concurrent Papers on the same date with overlapping time
+  const concurrentPapers = allPapers.filter(
+    (p) => p.id !== targetPaper.id && arePapersConcurrent(p, targetPaper)
+  );
+
+  // Collect seat allocations already granted to concurrent papers
+  const concurrentAllocations = concurrentPapers.flatMap(
+    (p) => existingAllocations[p.id] || []
+  );
+
+  // Check for candidate timetable clash (same candidate taking 2 concurrent papers)
+  const clashCandidates = sortedCandidates.filter((cand) =>
+    concurrentPapers.some((cp) => cand.subjectCodes.includes(cp.code))
+  );
+  if (clashCandidates.length > 0) {
+    warnings.push(
+      `Timetable clash detected: ${clashCandidates.length} candidate(s) (e.g. ${clashCandidates.slice(0, 3).map((c) => c.indexNumber).join(', ')}) are enrolled in concurrent papers scheduled at the same time.`
+    );
+  }
+
   // Check for Back-to-Back Preceding Paper on the same day for venue continuity
   const precedingPaper = allPapers.find((p) => p.id !== targetPaper.id && isBackToBack(p, targetPaper));
   const previousPaperAllocations = precedingPaper ? existingAllocations[precedingPaper.id] || [] : [];
@@ -71,6 +107,45 @@ export function runDeterministicAllocation(
   const isListeningComp = targetPaper.type === 'LISTENING_COMP';
   const isScienceLab = targetPaper.type === 'SCIENCE_LAB';
   const requiresComputer = targetPaper.requiresComputer;
+
+  // Determine blocked venues due to no-combine restrictions:
+  // - Listening comprehension must never combine with any other paper
+  // - Papers with allowCombine === false cannot combine
+  const canTargetCombine = targetPaper.allowCombine !== false && !isListeningComp && targetPaper.type !== 'ORAL';
+  const nonCombineConcurrentPaperIds = new Set(
+    concurrentPapers
+      .filter((cp) => cp.allowCombine === false || cp.type === 'LISTENING_COMP' || cp.type === 'ORAL')
+      .map((cp) => cp.id)
+  );
+  const venuesUsedByConcurrent = new Set(concurrentAllocations.map((a) => a.venueId));
+  const blockedVenuesFromNonCombine = new Set(
+    concurrentAllocations
+      .filter((a) => nonCombineConcurrentPaperIds.has(a.paperId))
+      .map((a) => a.venueId)
+  );
+
+  const isVenueBlocked = (venueId: string): boolean => {
+    if (!canTargetCombine && venuesUsedByConcurrent.has(venueId)) {
+      return true;
+    }
+    return blockedVenuesFromNonCombine.has(venueId);
+  };
+
+  // Helper to check if a specific desk in a venue is already occupied
+  // by another candidate in targetPaper or by any concurrent paper
+  const isSeatOccupied = (venueId: string, row: number, col: number, shiftIndex?: number): boolean => {
+    const inTarget = allocations.some(
+      (a) => a.venueId === venueId && a.row === row && a.col === col && (shiftIndex === undefined || a.shiftIndex === shiftIndex)
+    );
+    if (inTarget) return true;
+
+    const inConcurrent = concurrentAllocations.some(
+      (a) => a.venueId === venueId && a.row === row && a.col === col && (shiftIndex === undefined || a.shiftIndex === shiftIndex)
+    );
+    if (inConcurrent) return true;
+
+    return false;
+  };
 
   // 1. Separate AA Candidates vs Standard Cohort
   // Exception: In Listening Comprehension, AA candidates join the rest of the cohort
@@ -156,12 +231,17 @@ export function runDeterministicAllocation(
 
     if (aaSeparateCandidates.length > 0) {
       const candidatePool = [...aaSeparateCandidates];
-      for (const venue of eligibleAaVenues) {
+      const unblockedAaVenues = eligibleAaVenues.filter((v) => !isVenueBlocked(v.id));
+      const targetAaVenues = unblockedAaVenues.length > 0 ? unblockedAaVenues : eligibleAaVenues;
+
+      for (const venue of targetAaVenues) {
         if (candidatePool.length === 0) break;
         const availableSeats = getSerpentineSeats(venue);
 
         for (const { seat, row, col } of availableSeats) {
           if (candidatePool.length === 0) break;
+          if (isSeatOccupied(venue.id, row, col, 1)) continue;
+
           const candidate = candidatePool.shift()!;
           allocations.push({
             paperId: targetPaper.id,
@@ -211,13 +291,21 @@ export function runDeterministicAllocation(
     eligibleVenues = [...nonLabs, ...computerLabsFallback];
   }
 
+  // Exclude venues that cannot be shared due to no-combine restrictions
+  const unblockedMainVenues = eligibleVenues.filter((v) => !isVenueBlocked(v.id));
+  if (unblockedMainVenues.length > 0) {
+    eligibleVenues = unblockedMainVenues;
+  } else if (eligibleVenues.some((v) => isVenueBlocked(v.id))) {
+    warnings.push('Notice: All eligible venues are in use by concurrent papers. Falling back to shared venues with collision-free seat allocation.');
+  }
+
   // 4. Handle Science Lab Shifts (Multi-Shift split + Holding Room)
   let isMultiShift = false;
   let holdingRoomVenueId: string | undefined;
 
   if (isScienceLab && eligibleVenues.length > 0) {
     const totalLabActiveSeats = eligibleVenues.reduce((sum, v) => {
-      const active = v.seatGrid.flat().filter((s) => s.isActive).length;
+      const active = v.seatGrid.flat().filter((s) => s.isActive && !isSeatOccupied(v.id, s.row, s.col, 1)).length;
       return sum + active;
     }, 0);
 
@@ -227,7 +315,7 @@ export function runDeterministicAllocation(
 
       // Find an idle classroom to serve as Quarantine / Holding Room
       const idleClassroom = allVenues.find(
-        (v) => !v.isLab && !v.isAaDesignated && v.seatGrid.flat().filter((s) => s.isActive).length >= Math.ceil(mainCohortCandidates.length / 2)
+        (v) => !v.isLab && !v.isAaDesignated && !isVenueBlocked(v.id) && v.seatGrid.flat().filter((s) => s.isActive && !isSeatOccupied(v.id, s.row, s.col)).length >= Math.ceil(mainCohortCandidates.length / 2)
       );
 
       if (idleClassroom) {
@@ -268,7 +356,12 @@ export function runDeterministicAllocation(
           const seatKey = `${venue.id}-${prevSeat.row}-${prevSeat.col}`;
           const currentSeatObj = venue.seatGrid[prevSeat.row]?.[prevSeat.col];
 
-          if (currentSeatObj && currentSeatObj.isActive && !continuitySeatsAllocated.has(seatKey)) {
+          if (
+            currentSeatObj &&
+            currentSeatObj.isActive &&
+            !continuitySeatsAllocated.has(seatKey) &&
+            !isSeatOccupied(venue.id, prevSeat.row, prevSeat.col, 1)
+          ) {
             // Retain exact same seat
             continuitySeatsAllocated.add(seatKey);
             allocations.push({
@@ -300,6 +393,7 @@ export function runDeterministicAllocation(
       const availableSeats = getSerpentineSeats(venue);
       for (const { seat, row, col } of availableSeats) {
         if (shift1Pool.length === 0) break;
+        if (isSeatOccupied(venue.id, row, col, 1)) continue;
         const candidate = shift1Pool.shift()!;
         allocations.push({
           paperId: targetPaper.id,
@@ -320,6 +414,7 @@ export function runDeterministicAllocation(
       const availableSeats = getSerpentineSeats(venue);
       for (const { seat, row, col } of availableSeats) {
         if (shift2Pool.length === 0) break;
+        if (isSeatOccupied(venue.id, row, col, 2)) continue;
         const candidate = shift2Pool.shift()!;
         allocations.push({
           paperId: targetPaper.id,
@@ -348,9 +443,10 @@ export function runDeterministicAllocation(
     if (remainingCandidates.length === 0) break;
 
     const orderedSeats = isListeningComp ? orderSeatsForLC(venue) : getSerpentineSeats(venue);
-    // If venue is computer lab, limit seats to computerStations
+    // If venue is computer lab, limit seats to remaining computerStations
+    const concurrentInVenue = concurrentAllocations.filter((a) => a.venueId === venue.id && a.shiftIndex === 1).length;
     const maxCapacity = requiresComputer && venue.hasComputers 
-      ? Math.min(venue.computerStations || orderedSeats.length, orderedSeats.length)
+      ? Math.max(0, Math.min(venue.computerStations || orderedSeats.length, orderedSeats.length) - concurrentInVenue)
       : orderedSeats.length;
 
     let seatsAssignedInVenue = 0;
@@ -359,11 +455,8 @@ export function runDeterministicAllocation(
       if (remainingCandidates.length === 0) break;
       if (seatsAssignedInVenue >= maxCapacity) break;
 
-      // Check if desk is already occupied from continuity pass
-      const isOccupied = allocations.some(
-        (a) => a.venueId === venue.id && a.row === row && a.col === col && a.paperId === targetPaper.id
-      );
-      if (isOccupied) continue;
+      // Check if desk is already occupied from continuity pass or concurrent paper
+      if (isSeatOccupied(venue.id, row, col, 1)) continue;
 
       const candidate = remainingCandidates.shift()!;
       allocations.push({
@@ -382,6 +475,20 @@ export function runDeterministicAllocation(
   const unallocatedCandidateIds = remainingCandidates.map((c) => c.id);
   if (unallocatedCandidateIds.length > 0) {
     warnings.push(`Not enough total venue capacity! ${unallocatedCandidateIds.length} candidate(s) could not be seated.`);
+  }
+
+  // Shared venue information notification
+  if (concurrentAllocations.length > 0) {
+    const sharedVenues = Array.from(new Set(allocations.map((a) => a.venueId))).filter((vid) =>
+      concurrentAllocations.some((ca) => ca.venueId === vid)
+    );
+    if (sharedVenues.length > 0) {
+      const sharedNames = sharedVenues.map((vid) => allVenues.find((v) => v.id === vid)?.name || vid).join(', ');
+      const otherCodes = Array.from(new Set(concurrentPapers.map((cp) => cp.code))).join(', ');
+      warnings.push(
+        `Shared venue seating: Allocated concurrently with ${otherCodes} in ${sharedNames} without seat overlap.`
+      );
+    }
   }
 
   return {

@@ -274,7 +274,7 @@ function normalizeSingaporeDate(rawDate: string): string {
   const str = String(rawDate).trim();
 
   // Match DD/MM/YYYY or DD-MM-YYYY (e.g. 13/07/2026 or 02-06-2026)
-  const dmyMatch = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  const dmyMatch = str.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
   if (dmyMatch) {
     const day = dmyMatch[1].padStart(2, '0');
     const month = dmyMatch[2].padStart(2, '0');
@@ -283,7 +283,7 @@ function normalizeSingaporeDate(rawDate: string): string {
   }
 
   // Match YYYY-MM-DD or YYYY/MM/DD
-  const ymdMatch = str.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+  const ymdMatch = str.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})/);
   if (ymdMatch) {
     const year = ymdMatch[1];
     const month = ymdMatch[2].padStart(2, '0');
@@ -382,11 +382,11 @@ export async function parsePdfTimetable(file: File): Promise<{ papers: ExamPaper
       const timeItems = remainingItems.slice(0, codeItemIdx);
       const code = remainingItems[codeItemIdx].str;
       const paperNoItem = remainingItems[codeItemIdx + 1];
-      const paperNo =
-        paperNoItem && /^\d{2}$/.test(paperNoItem.str) ? paperNoItem.str : '01';
+      const hasPaperNo = paperNoItem && /^\d{2}$/.test(paperNoItem.str);
+      const paperNo = hasPaperNo ? paperNoItem.str : '01';
 
       const moaIdx = remainingItems.findIndex((i) =>
-        ['WRITTEN', 'LC', 'ORAL', 'PRACTICAL', 'SCIENCE PRACTICAL'].includes(
+        ['WRITTEN', 'LC', 'ORAL', 'PRACTICAL', 'SCIENCE PRACTICAL', 'LISTENING', 'LISTENING COMPREHENSION'].includes(
           i.str.toUpperCase()
         )
       );
@@ -398,13 +398,26 @@ export async function parsePdfTimetable(file: File): Promise<{ papers: ExamPaper
       let moa = 'WRITTEN';
       let rawDuration = '01:30';
 
-      if (moaIdx > codeItemIdx + 1) {
-        subjName = remainingItems
-          .slice(codeItemIdx + 2, moaIdx)
-          .map((i) => i.str)
-          .join(' ');
+      const subjStartIndex = hasPaperNo ? codeItemIdx + 2 : codeItemIdx + 1;
+
+      if (moaIdx !== -1) {
+        if (moaIdx > subjStartIndex) {
+          subjName = remainingItems
+            .slice(subjStartIndex, moaIdx)
+            .map((i) => i.str)
+            .join(' ');
+        }
         moa = remainingItems[moaIdx].str;
+      } else {
+        const endIdx = durIdx !== -1 ? durIdx : remainingItems.length;
+        if (endIdx > subjStartIndex) {
+          subjName = remainingItems
+            .slice(subjStartIndex, endIdx)
+            .map((i) => i.str)
+            .join(' ');
+        }
       }
+
       if (durIdx !== -1) {
         rawDuration = remainingItems[durIdx].str;
       }
@@ -427,6 +440,8 @@ export async function parsePdfTimetable(file: File): Promise<{ papers: ExamPaper
         cleanTitle.includes('SHIFT')
       ) {
         paperType = 'SCIENCE_LAB';
+      } else if (cleanMoa === 'ORAL') {
+        paperType = 'ORAL';
       }
 
       const durationMins = normalizeDurationMins(rawDuration, paperType);
@@ -440,13 +455,16 @@ export async function parsePdfTimetable(file: File): Promise<{ papers: ExamPaper
         cleanMoa.includes('COMPUTER') ||
         cleanMoa.includes('E-EXAM');
 
-      const allowCombine = paperType !== 'LISTENING_COMP';
+      const allowCombine = paperType !== 'LISTENING_COMP' && paperType !== 'ORAL';
       const compositeCode = `${code}/${paperNo}`;
 
-      // Handle shift papers (e.g. SHIFT 1: CHEMISTRY, SHIFT 2: CHEMISTRY)
+      // Build a unique paper key per subject+paper+type so ORAL and LC/WRITTEN
+      // entries with the same composite code (e.g. 1202/03) are stored separately.
       const paperKey = cleanTitle.includes('SHIFT')
         ? `${compositeCode}-${cleanTitle.slice(0, 7).replace(/[^A-Za-z0-9]/g, '')}`
-        : compositeCode;
+        : paperType === 'ORAL'
+          ? `${compositeCode}-ORAL`
+          : compositeCode;
 
       if (!papersMap.has(paperKey)) {
         papersMap.set(paperKey, {

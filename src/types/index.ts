@@ -1,4 +1,4 @@
-export type PaperType = 'STANDARD' | 'SCIENCE_LAB' | 'LISTENING_COMP';
+export type PaperType = 'STANDARD' | 'SCIENCE_LAB' | 'LISTENING_COMP' | 'ORAL';
 
 export interface AccessArrangement {
   extraTimePct: number;       // e.g. 0, 15, 25, 50

@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useExamStore } from '../store/useExamStore';
-import { runDeterministicAllocation } from '../services/allocationEngine';
+import { runDeterministicAllocation, arePapersConcurrent } from '../services/allocationEngine';
 import { getCandidatePaperArrangement } from '../types';
 import { 
   Play, 
@@ -70,16 +70,32 @@ export const AllocationViewer: React.FC = () => {
     return allocations[currentPaper.id] || [];
   }, [allocations, currentPaper]);
 
+  // Concurrent papers scheduled on the same date with overlapping duration
+  const concurrentPapers = useMemo(() => {
+    if (!currentPaper) return [];
+    return papers.filter((p) => p.id !== currentPaper.id && arePapersConcurrent(p, currentPaper));
+  }, [papers, currentPaper]);
+
+  // Existing allocations for concurrent papers
+  const concurrentAllocations = useMemo(() => {
+    if (concurrentPapers.length === 0) return [];
+    return concurrentPapers.flatMap((p) => allocations[p.id] || []);
+  }, [concurrentPapers, allocations]);
+
   // Enrolled candidates for current paper
   const enrolledCandidates = useMemo(() => {
     if (!currentPaper) return [];
     return candidates.filter((c) => c.subjectCodes.includes(currentPaper.code));
   }, [candidates, currentPaper]);
 
-  // Venues used in this allocation
+  // Venues used in this allocation (and concurrent allocations for this slot)
   const allocatedVenueIds = useMemo(() => {
-    return Array.from(new Set(currentAllocations.map((a) => a.venueId)));
-  }, [currentAllocations]);
+    const ids = new Set([
+      ...currentAllocations.map((a) => a.venueId),
+      ...concurrentAllocations.map((a) => a.venueId)
+    ]);
+    return Array.from(ids);
+  }, [currentAllocations, concurrentAllocations]);
 
   const allocatedVenues = useMemo(() => {
     return venues.filter((v) => allocatedVenueIds.includes(v.id));
@@ -162,11 +178,13 @@ export const AllocationViewer: React.FC = () => {
     );
     const targetPapers = papersWithCandidates.length > 0 ? papersWithCandidates : papers;
 
-    // Chronological sort
+    // Chronological and deterministic sort: date -> startTime -> code
     const sorted = [...targetPapers].sort((a, b) => {
       const d = a.date.localeCompare(b.date);
       if (d !== 0) return d;
-      return a.startTime.localeCompare(b.startTime);
+      const t = a.startTime.localeCompare(b.startTime);
+      if (t !== 0) return t;
+      return a.code.localeCompare(b.code);
     });
 
     const newAllocations: Record<string, any[]> = {};
@@ -181,7 +199,7 @@ export const AllocationViewer: React.FC = () => {
         candidates,
         venues,
         papers,
-        newAllocations // accumulates to enforce short-gap venue continuity!
+        newAllocations // accumulates to enforce short-gap venue continuity and concurrent non-overlap!
       );
 
       newAllocations[paper.id] = result.allocations;
@@ -234,7 +252,7 @@ export const AllocationViewer: React.FC = () => {
     const targetVenue = venues.find((v) => v.id === targetVenueId);
     if (!targetVenue) return;
 
-    // Find first active, unoccupied seat in target venue
+    // Find first active, unoccupied seat in target venue (must not collide with current or concurrent papers)
     let foundSeat: { row: number; col: number; seatLabel: string } | null = null;
 
     for (let r = 0; r < targetVenue.seatGrid.length; r++) {
@@ -242,6 +260,8 @@ export const AllocationViewer: React.FC = () => {
         const seat = targetVenue.seatGrid[r][c];
         if (seat.isActive) {
           const isOccupied = currentAllocations.some(
+            (a) => a.venueId === targetVenue.id && a.row === r && a.col === c
+          ) || concurrentAllocations.some(
             (a) => a.venueId === targetVenue.id && a.row === r && a.col === c
           );
           if (!isOccupied) {
@@ -289,6 +309,21 @@ export const AllocationViewer: React.FC = () => {
     assignedCandidateId?: string
   ) => {
     if (!currentPaper) return;
+
+    // If clicking a seat occupied by a concurrent exam: block with info notice
+    const concurrentAlloc = concurrentAllocations.find(
+      (a) => a.venueId === venueId && a.row === row && a.col === col
+    );
+    if (concurrentAlloc) {
+      const otherPaper = papers.find((p) => p.id === concurrentAlloc.paperId);
+      const otherCand = candidates.find((c) => c.id === concurrentAlloc.candidateId);
+      setSwapActionNotice({
+        message: `Desk ${seatLabel} is occupied by Candidate ${otherCand?.indexNumber || concurrentAlloc.candidateId} taking concurrent paper ${otherPaper?.code || 'another exam'}.`,
+        type: 'info',
+      });
+      setTimeout(() => setSwapActionNotice(null), 4500);
+      return;
+    }
 
     // If nothing selected yet:
     if (!selectedSeatForSwap) {
@@ -580,8 +615,9 @@ export const AllocationViewer: React.FC = () => {
           <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 pb-2">
             {displayedVenues.map((v) => {
               const countInVenue = currentAllocations.filter((a) => a.venueId === v.id).length;
+              const concurrentInVenue = concurrentAllocations.filter((a) => a.venueId === v.id).length;
               const isActive = activeVenue?.id === v.id;
-              const isEmpty = countInVenue === 0;
+              const isEmpty = countInVenue === 0 && concurrentInVenue === 0;
               const isSourceOfSwap = selectedSeatForSwap?.venueId === v.id;
 
               return (
@@ -611,7 +647,9 @@ export const AllocationViewer: React.FC = () => {
                         : 'bg-slate-100 text-slate-600'
                     }`}
                   >
-                    {isEmpty ? 'Empty' : `${countInVenue} seated`}
+                    {isEmpty
+                      ? 'Empty'
+                      : `${countInVenue} seated${concurrentInVenue > 0 ? ` (+${concurrentInVenue} concurrent)` : ''}`}
                   </span>
                   {isSourceOfSwap && (
                     <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" title="Source of Selected Candidate" />
@@ -662,6 +700,18 @@ export const AllocationViewer: React.FC = () => {
                       ? candidates.find((cand) => cand.id === allocation.candidateId)
                       : null;
 
+                    const concurrentAlloc = !allocation
+                      ? concurrentAllocations.find(
+                          (a) => a.venueId === activeVenue.id && a.row === r && a.col === c
+                        )
+                      : null;
+                    const concurrentPaper = concurrentAlloc
+                      ? papers.find((p) => p.id === concurrentAlloc.paperId)
+                      : null;
+                    const concurrentCandidate = concurrentAlloc
+                      ? candidates.find((cand) => cand.id === concurrentAlloc.candidateId)
+                      : null;
+
                     const isSelected =
                       selectedSeatForSwap &&
                       selectedSeatForSwap.candidateId === allocation?.candidateId;
@@ -694,10 +744,12 @@ export const AllocationViewer: React.FC = () => {
                         className={`h-28 rounded-xl border p-2.5 flex flex-col justify-between transition-all cursor-pointer select-none ${
                           isSelected
                             ? 'ring-2 ring-indigo-500 bg-indigo-50/90 border-indigo-500 shadow-md scale-102'
-                            : selectedSeatForSwap && !candidate
+                            : selectedSeatForSwap && !candidate && !concurrentAlloc
                             ? 'bg-emerald-50/40 border-dashed border-emerald-300 hover:border-emerald-500 hover:bg-emerald-50/80 shadow-xs'
                             : selectedSeatForSwap && candidate
                             ? 'bg-amber-50/40 border-amber-300 hover:border-amber-500 hover:bg-amber-50/80 shadow-xs'
+                            : concurrentAlloc
+                            ? 'bg-purple-50/70 border-purple-200 text-purple-900 shadow-xs'
                             : candidate
                             ? candidate.arrangements &&
                               ((candidate.arrangements.extraTimePct ?? 0) > 0 ||
@@ -712,11 +764,21 @@ export const AllocationViewer: React.FC = () => {
                           <span className="font-mono font-bold text-xs text-slate-600">
                             {seat.seatLabel}
                           </span>
-                          {seat.hasComputer && (
-                            <span title="Equipped with Computer Workstation">
-                              <Monitor className="w-3.5 h-3.5 text-sky-600" />
-                            </span>
-                          )}
+                          <div className="flex items-center gap-1">
+                            {seat.hasComputer && (
+                              <span title="Equipped with Computer Workstation">
+                                <Monitor className="w-3.5 h-3.5 text-sky-600" />
+                              </span>
+                            )}
+                            {concurrentAlloc && (
+                              <span
+                                className="font-mono font-bold text-[9px] bg-purple-100 text-purple-800 border border-purple-200 px-1 py-0.2 rounded"
+                                title={`Occupied by concurrent exam: ${concurrentPaper?.code || ''} — ${concurrentPaper?.title || ''}`}
+                              >
+                                {concurrentPaper?.code}
+                              </span>
+                            )}
+                          </div>
                         </div>
 
                         {/* Candidate Information */}
@@ -736,6 +798,20 @@ export const AllocationViewer: React.FC = () => {
                               {candidate.fullName}
                             </p>
                           </div>
+                        ) : concurrentAlloc ? (
+                          <div className="space-y-0.5">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-mono font-black text-sm text-purple-950 bg-purple-100/90 px-1.5 py-0.5 rounded border border-purple-200">
+                                {concurrentCandidate?.indexNumber || concurrentAlloc.candidateId}
+                              </span>
+                              <span className="text-[10px] font-bold text-purple-700">
+                                Concurrent
+                              </span>
+                            </div>
+                            <p className="text-xs font-semibold text-purple-900 line-clamp-1" title={concurrentCandidate?.fullName}>
+                              {concurrentCandidate?.fullName || 'Concurrent Candidate'}
+                            </p>
+                          </div>
                         ) : (
                           <div className="text-center py-2 text-xs font-medium">
                             {selectedSeatForSwap ? (
@@ -750,7 +826,11 @@ export const AllocationViewer: React.FC = () => {
 
                         {/* Badges footer */}
                         <div className="flex items-center justify-between text-[10px] pt-1 border-t border-slate-100">
-                          {(() => {
+                          {concurrentAlloc ? (
+                            <span className="text-[10px] text-purple-700 font-medium truncate max-w-[90px]" title={concurrentPaper?.title}>
+                              {concurrentPaper?.title || 'Concurrent Paper'}
+                            </span>
+                          ) : (() => {
                             const arr = getCandidatePaperArrangement(candidate, currentPaper?.code);
                             if (arr && ((arr.extraTimePct ?? 0) > 0 || arr.frontSeatMobility || arr.needsSeparateRoom)) {
                               return (
