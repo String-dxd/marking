@@ -142,6 +142,81 @@ Tallus operates locally on port **8250** by default.
 
 ---
 
+## 🎯 Coordinate-Grounded Direct Marking
+
+Unlike traditional AI grading systems that output detached feedback in a side panel, Tallus **burns corrections directly onto the student script** using the visual language of a teacher's traditional red pen.
+
+```
+                  [Teacher's Red Pen Visual Language]
+  ✓ Tick                 -> Directly after correct working / keyword
+  ✗ Cross                -> After incorrect phrase or centered in empty answer line
+  ⭕ Circle              -> Tightly surrounding erroneous numbers, units, or points
+  [✓ Axes labelled]      -> Stacked criteria checklists in clean margins near graphs
+  少改: [Refined phrase] -> Inline collocation upgrades and character corrections
+  ★ [Margin remark]      -> Pedagogical guidance in gutter with non-colliding leader lines
+```
+
+### Key Capabilities:
+- **Normalized 0..1000 Coordinate System**:
+  - Every bounding box `[ymin, xmin, ymax, xmax]` is normalized to a universal `1000×1000` grid, allowing seamless scaling across any scanning resolution (72 to 300+ DPI).
+- **Ink-Aware Anchoring (`evidence` & `target`)**:
+  - Annotations bind directly to extracted handwriting tokens and physical ink coordinates rather than guessing bounding boxes, preventing spatial drift.
+- **Smart Collision Avoidance & Gutter Pinned Alignment**:
+  - Right-margin pedagogical commentary (`margin_star`) sorts by vertical position (`target_y`) and enforces dynamic minimum spacing (`line_height`, `curr_bottom_y + 12`).
+  - Connecting leader lines with anchor dots (`draw.ellipse`, `draw.line`) visually tether margin comments back to the exact handwritten phrase on the script.
+- **Graph & Diagram Checklists**:
+  - For graphs and visual drawings, marks are not scattered randomly across the grid. Tallus neatly stacks criteria items (Axes, Scale, Points, Line of Best Fit) into a compact vertical checklist in adjacent whitespace.
+- **Sub-Pixel High-DPI Rendering**:
+  - PyMuPDF and PIL vector drawing engine renders crisp red marks (`#dc2626`), rounded score badges, and anti-aliased arcs directly onto high-resolution page bitmaps.
+
+---
+
+## 🔬 Specialized Marker Methodologies
+
+Tallus uses an extensible marker architecture (`BaseSubjectMarker`) where each subject runs on specialized prompt engineering, layout algorithms, and grading rules tailored to its domain:
+
+### 1. General Subject Marker (`GeneralMarker`)
+- **Domain**: Multi-question worksheets, standard test papers, general humanities, and mathematics.
+- **Key Methodologies**:
+  - **Step 1A (Transcription)**: Verbatim OCR extraction of question numbers (`Q1, Q2...`) and student handwriting.
+  - **Step 1B (Rubric Scoring)**: Evaluates extracted answers independently against expected answers, computing mark totals, criteria breakdowns, and question-level feedback.
+
+### 2. Lower Secondary Science Marker (`LowerSecScienceMarker`)
+- **Domain**: Lower Secondary & O-Level Science (Physics, Chemistry, Biology) structured questions, apparatus diagrams, experimental setups, and graph analysis.
+- **Key Methodologies**:
+  - **Cross-Page Question Stitching**: Detects when multi-part questions (e.g., Q1(a) on Page 1 and Q1(b) on Page 2) span page breaks, consolidating them into a unified evaluation context.
+  - **Dual-Axis Criteria Grounding**: Supports both vertical question rubrics and horizontal mark distribution tables.
+  - **Full-Width Unfilled Box Discovery**:
+    - When students only fill some parts of a multi-box diagram (e.g., filling 2 out of 6 organelle boxes), standard OCR only detects ink on the filled side.
+    - Tallus sweeps the full diagram width and applies ink-density heuristics to locate empty answer boxes, placing zero-score crosses without coordinate collapse.
+  - **Rigorous 4-Criteria Graph Analysis Protocol**:
+    1. *Axes & Scale*: Validates correct variable labels, units, and linear scale covering $\ge 50\%$ of the grid area.
+    2. *Plotting Accuracy*: Coordinate verification within $\pm 0.5$ small square tolerance; circles specific misplaced points.
+    3. *Line / Curve Quality (Strict Ruler Test)*: Checks whether a straight line of best fit was drawn using a physical ruler. Wavy, freehand, sagging, or dot-to-dot lines are awarded 0 marks with explicit feedback.
+    4. *Gradient / Intercept*: Validates coordinate substitution using large slope triangles ($\ge 50\%$).
+  - **Independent Table Column Evaluation**: For multi-column observation tables (e.g., Instrument column + Unit column), evaluates every cell independently so unit marks are never omitted.
+
+### 3. Chinese Composition / Essay Marker (`ChineseEssayMarker`)
+- **Domain**: Continuous Chinese narrative and expository compositions (记叙文 / 议论文) written on standard grid sheets.
+- **Key Methodologies**:
+  - **20×20 Composition Grid Paper Engine (`app/core/grid_paper_transcriptions.py`)**:
+    - Detects grid geometry across standard 400-character composition sheets (田字格 / 方格纸).
+    - Maps OCR character tokens into a discrete 20×20 coordinate matrix.
+    - **Exact Character Counting**: Excludes empty lines, titles, and standard 2-space paragraph indentations.
+    - **Punctuation Compliance**: Detects illegal punctuation at line beginnings (标点顶格), and handles multi-grid punctuation (破折号 `——`, 省略号 `……`).
+  - **Dual-Criterion Holistic Rubrics**:
+    - *内容 (Content - 20 or 30 marks)*: Theme relevance, plot conflict, emotional resonance, and pacing.
+    - *表达 (Language & Structure - 20 or 30 marks)*: Vocabulary richness, sentence fluency, rhetorical devices, and paragraph transitions.
+    - Applies center-compressed band scaling to align with realistic senior examiner grading standards.
+  - **In-Situ Fine-Grained Annotations (随文细致批注)**:
+    - `char_replace`: Circles wrong characters (错别字) and places the correct glyph directly adjacent to the grid cell.
+    - `clause_rewrite`: Highlights awkward syntax and suggests elevated phrasing (`★改：...`).
+    - `descriptive_caret`: Recommends insertions of sensory, psychological, or environmental detail (`^...`).
+    - `block_prune`: Marks redundant or off-topic paragraphs with red wavy strikethrough.
+    - `margin_star`: Generates pinned margin remarks on thematic climaxes and narrative structure.
+
+---
+
 ## 🧪 Running Automated Tests
 
 Tallus includes a comprehensive suite of 24 specialized test modules covering API routes, document splitting, layout detection, subject markers, and pipeline resilience:
