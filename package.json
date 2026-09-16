@@ -1,12 +1,12 @@
 {
   "name": "plexo",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "package": "tsc -b && vite build && powershell -Command \"Copy-Item dist/index.html dist/Plexo-v0.1-Standalone.html -Force; Copy-Item dist/index.html Plexo-v0.1-Standalone.html -Force; Compress-Archive -Path dist/* -DestinationPath plexo-v0.1.zip -Force\"",
+    "package": "tsc -b && vite build && powershell -Command \"Copy-Item dist/index.html dist/Plexo-v0.2-Standalone.html -Force; Copy-Item dist/index.html Plexo-v0.2-Standalone.html -Force; Copy-Item dist/index.html Plexo-v0.1-Standalone.html -Force; Compress-Archive -Path dist/* -DestinationPath plexo-v0.2.zip -Force; Compress-Archive -Path dist/* -DestinationPath plexo-v0.1.zip -Force\"",
     "lint": "oxlint",
     "preview": "vite preview"
   },

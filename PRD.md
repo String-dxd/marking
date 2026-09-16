@@ -195,9 +195,14 @@ export interface SeatAllocation {
 
 ### Stage 6: Audit & Print Reports
 
+* **Room Use Overview (by Day):** 5-minute granular horizontal timeline matrix showing whole-school exam room bookings and concurrent candidate load.
+* **Door Noticeboard Sheet:** Anonymous seating layout sorted by Candidate Index $\to$ Venue $\to$ Desk Number.
 * **Desk Slips:** 8-up or 10-up grid template with Candidate Name, Index Number, Paper Name, and Seat Label, ready for standard A4 sticker/paper printing.
-* **Door Noticeboard Sheet:** Sorted by Candidate Name/Index $\to$ Venue $\to$ Desk Number.
-* **Invigilator Attendance Matrix:** Visual 2D desk plan with signature boxes for candidate verification and script tallying.
+* **Invigilator Attendance Matrix:** Visual candidate verification roster with checkboxes for script collection and signature lines.
+* **Candidate Entry Proof:** Official individual student entry proof & examination timetable card.
+* **Exam Packing Cover Page (2-Page per Venue):** Dedicated packing slip and envelope cover report separated by venue:
+  * **Page 1:** Complete examination paper particulars, reporting/dismissal timings, candidature count, class breakdown, access arrangement summaries, seated candidate roster, and official SEAB packing checklist & script return reconciliation sign-off blocks.
+  * **Page 2:** Official examination title header, Teacher's Bench indicator, and complete 2D seating plan floor layout showing desk labels, candidate index numbers, classes, names, and AA flags.
 
 ---
 

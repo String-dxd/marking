@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useExamStore } from '../store/useExamStore';
 import { parseMultipleTimetableFiles, parseMultipleInternalTimetableFiles, syncInternalCandidateEnrollments } from '../services/candidateParser';
-import { getDistinctLevels, getPaperLevel } from '../services/allocationEngine';
+import { getDistinctLevels, getPaperLevel, isCandidateEligibleForPaper } from '../services/allocationEngine';
 import type { ExamPaper, PaperType, Candidate } from '../types';
 import { 
   Calendar, 
@@ -348,7 +348,7 @@ export const TimetableManager: React.FC = () => {
                   const reportingTime = addMinutesToTime(paper.startTime, -30);
                   const dismissalTime = addMinutesToTime(paper.startTime, paper.durationMins + 15);
                   const enrolledCount = candidates.filter((c) =>
-                    c.subjectCodes.includes(paper.code)
+                    isCandidateEligibleForPaper(c, paper)
                   ).length;
 
                   return (
@@ -815,7 +815,7 @@ const DeleteDaysModal: React.FC<DeleteDaysModalProps> = ({
   const datesList = useMemo(() => {
     return Object.entries(groupedPapers).map(([date, datePapers]) => {
       const enrolledCount = candidates.filter((c) =>
-        datePapers.some((p) => c.subjectCodes.includes(p.code))
+        datePapers.some((p) => isCandidateEligibleForPaper(c, p))
       ).length;
       return {
         date,

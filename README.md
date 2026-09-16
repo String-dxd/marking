@@ -7,6 +7,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-6.0-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Vite](https://img.shields.io/badge/Vite-8.2-646CFF?logo=vite&logoColor=white)](https://vite.dev/)
 [![Tailwind CSS v4](https://img.shields.io/badge/Tailwind_CSS-v4.3-06B6D4?logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
+[![Version](https://img.shields.io/badge/Version-v0.2-indigo)](./PRD.md)
 [![100% Client-Side](https://img.shields.io/badge/Architecture-100%25_Client--Side-10B981)](./docs/USER_GUIDE.md)
 
 
@@ -130,10 +131,14 @@ flowchart TD
 - **Intra-Room & Cross-Room Swapping:** Swap any two candidates within a room or across different venues, or move candidates to empty standby rooms.
 
 ### Stage 5: Official SEAB-Compliant Print & Audit Reports
-1. **Room Use Overview (Matrix):** Consolidated time-slot schedule showing room allocations, student counts, and daily throughput with one-click Excel export.
+1. **Room Use Overview (Matrix):** Consolidated 5-minute granular horizontal timeline schedule showing room allocations, student counts, and daily throughput with one-click Excel export.
 2. **Candidate Door Notice Cards:** Posted on room entrance doors; **strictly displays 4-digit Index Numbers only** (student names suppressed for PDPA privacy).
 3. **Candidate Desk Slips (8-Up A4):** Pre-formatted grid with cutting lines, candidate names, index numbers, desk labels, and AA badges.
 4. **Invigilator Attendance & Script Verification Matrix:** Printable 2D desk roster with verification checkboxes (`[ ] Absent`, `[ ] Script Collected`) and Chief Invigilator tally footers.
+5. **Candidate Entry Proof & Timetable Slips:** Official individual student entry proof & examination timetable slips with registered papers, venues, and seats (1-Up or 2-Up paper saver).
+6. **Exam Packing Cover Page (2-Page per Venue):** Dedicated packing envelope cover separated by venue:
+   - **Page 1:** Examination paper particulars, candidate reporting/dismissal timings, candidate totals, class distribution, access arrangement summary, and official SEAB packing checklist & script reconciliation sign-offs.
+   - **Page 2:** Official examination title header, Teacher's Bench indicator, and complete 2D seating plan floor layout showing desk labels, student index numbers, classes, names, and AA flags.
 
 ---
 
@@ -160,8 +165,8 @@ flowchart TD
 ### Option 1: Zero-Install Standalone HTML (Recommended for Schools)
 
 No technical installation or dependencies required:
-1. Download or locate `Plexo-v0.1-Standalone.html` (or extract `plexo-v0.1.zip`).
-2. **Double-click `Plexo-v0.1-Standalone.html`** in Microsoft Edge or Google Chrome.
+1. Download or locate `Plexo-v0.2-Standalone.html` (or extract `plexo-v0.2.zip`).
+2. **Double-click `Plexo-v0.2-Standalone.html`** in Microsoft Edge or Google Chrome.
 3. The platform opens immediately as an offline local application (`file:///...`).
 
 ### Option 2: Developer Setup (Local Source)
@@ -198,7 +203,7 @@ npm run build
 ```bash
 npm run package
 ```
-This compiles all TypeScript, React components, CSS, and libraries into a single, self-contained `dist/Plexo-v0.1-Standalone.html` file using `vite-plugin-singlefile`.
+This compiles all TypeScript, React components, CSS, and libraries into a single, self-contained `dist/Plexo-v0.2-Standalone.html` file using `vite-plugin-singlefile`.
 
 ---
 
@@ -222,7 +227,9 @@ plexo/
 │   │   └── ReportViewer.tsx       # Stage 5: SEAB audit & print reports
 │   ├── services/                  # Business logic & computation
 │   │   ├── allocationEngine.ts    # Deterministic multi-constraint seating solver
-│   │   └── candidateParser.ts     # In-browser Excel/CSV/PDF register parsers
+│   │   ├── candidateParser.ts     # In-browser Excel/CSV/PDF register parsers
+│   │   ├── internalCandidateParser.ts # MOE Internal Marksheet RE_RES_090 parser
+│   │   └── internalTimetableParser.ts # School EOY Timetable parser
 │   ├── store/
 │   │   └── useExamStore.ts        # Zustand reactive state & localStorage sync
 │   ├── types/
@@ -232,7 +239,8 @@ plexo/
 │   └── index.css                  # Tailwind CSS v4 styling & print directives
 ├── index.html                     # Vite entry HTML
 ├── package.json                   # Project metadata & npm scripts
-├── Plexo-v0.1-Standalone.html     # Ready-to-run zero-install offline HTML
+├── Plexo-v0.2-Standalone.html     # Ready-to-run zero-install offline HTML (v0.2)
+├── Plexo-v0.1-Standalone.html     # Prior release legacy build (v0.1)
 ├── Plexo-v0.1-User-Guide.pdf      # Printable operations guide
 ├── PRD.md                         # Full Product Requirements Document
 ├── README.md                      # Repository overview & setup guide

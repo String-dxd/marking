@@ -1,11 +1,11 @@
 import * as XLSX from 'xlsx';
-import * as pdfjsLib from 'pdfjs-dist';
-import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 import type { ExamPaper, PaperType, Candidate } from '../types';
 import { arePapersConcurrent, extractLevelNumber } from './allocationEngine';
 
+// PDF.js worker setup
 if (typeof window !== 'undefined' && pdfjsLib.GlobalWorkerOptions) {
-  pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+  pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.mjs', import.meta.url).href;
 }
 
 export interface InternalTimetableParseResult {
@@ -192,7 +192,7 @@ export function parseTimeRange(raw: string): { startTime: string; endTime: strin
 /**
  * Parses duration strings like "1 hr 30 mins", "2 hrs", "30 mins", "40 mins", "1 hr 15 mins", "1 hr"
  */
-function parseDurationMins(raw: string, fallbackMins: number = 90): number {
+export function parseDurationMins(raw: string, fallbackMins: number = 90): number {
   const clean = raw.toLowerCase().trim();
   let totalMins = 0;
 
@@ -232,7 +232,18 @@ export function resolveInternalSubjectMapping(
   stream: string,
   subjectTitle: string
 ): InternalSubjectMapping[] {
-  const cleanSubj = subjectTitle.trim();
+  let cleanSubj = subjectTitle.trim();
+  const requiresComputer =
+    /\b(?:e-exam|e-examination|computer|computing)\b/i.test(cleanSubj) ||
+    /\(e-exam/i.test(cleanSubj) ||
+    /\(e-examination/i.test(cleanSubj);
+
+  cleanSubj = cleanSubj
+    .replace(/\[.*?\]/g, '')
+    .replace(/\(e-Examination\)|\(e-Exam\)/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+
   const upperSubj = cleanSubj.toUpperCase();
   const cleanStream = (stream || 'G3').toUpperCase().trim();
 
@@ -243,11 +254,6 @@ export function resolveInternalSubjectMapping(
     paperType = 'SCIENCE_LAB';
   }
 
-  const requiresComputer =
-    upperSubj.includes('E-EXAM') ||
-    upperSubj.includes('COMPUTER') ||
-    upperSubj.includes('COMPUTING');
-
   let suffix = '';
   let paperNumLabel = '';
   if (upperSubj.includes('P1') || upperSubj.includes('PAPER 1')) {
@@ -256,6 +262,12 @@ export function resolveInternalSubjectMapping(
   } else if (upperSubj.includes('P2') || upperSubj.includes('PAPER 2')) {
     suffix = '/P2';
     paperNumLabel = 'Paper 2';
+  } else if (upperSubj.includes('P3') || upperSubj.includes('PAPER 3')) {
+    suffix = '/P3';
+    paperNumLabel = 'Paper 3';
+  } else if (upperSubj.includes('P4') || upperSubj.includes('PAPER 4')) {
+    suffix = '/P4';
+    paperNumLabel = 'Paper 4';
   } else if (upperSubj.includes('LISTENING') || upperSubj.includes('LC')) {
     suffix = '/LC';
     paperNumLabel = 'LC';
@@ -378,7 +390,22 @@ export function resolveInternalSubjectMapping(
     }];
   }
 
-  // 7. Mathematics
+  // 7. Additional Mathematics (must precede Mathematics)
+  if (upperSubj.includes('ADDITIONAL MATHEMATICS') || upperSubj.includes('ADD MATH') || upperSubj.includes('A-MATH')) {
+    const baseSubjectCode = `A-Math - ${cleanStream}`;
+    const paperCode = suffix ? `${baseSubjectCode}${suffix}` : baseSubjectCode;
+    const paperTitle = `Additional Mathematics${paperNumLabel ? ' ' + paperNumLabel : ''} (${cleanStream})`;
+    return [{
+      baseSubjectCode,
+      paperCode,
+      paperTitle,
+      paperType,
+      requiresComputer,
+      eligibleStudentCodes: [baseSubjectCode],
+    }];
+  }
+
+  // 8. Mathematics
   if (upperSubj.includes('MATHEMATICS') || upperSubj.includes('MATHS') || upperSubj.startsWith('MATH')) {
     const baseSubjectCode = `Maths - ${cleanStream}`;
     const paperCode = suffix ? `${baseSubjectCode}${suffix}` : baseSubjectCode;
@@ -393,20 +420,138 @@ export function resolveInternalSubjectMapping(
     }];
   }
 
-  // 8. Science
-  if (upperSubj.includes('SCIENCE') || upperSubj.startsWith('SCI')) {
-    const baseSubjectCode = `Sci - ${cleanStream}`;
+  // 9. Nutrition & Food Science / Food & Consumer Education (must precede Science)
+  if (upperSubj.includes('NUTRITION') || upperSubj.includes('FOOD SCIENCE') || upperSubj.includes('NFS') || upperSubj.includes('FCE')) {
+    const baseSubjectCode = `NFS - ${cleanStream}`;
+    const paperCode = suffix ? `${baseSubjectCode}${suffix}` : baseSubjectCode;
+    const paperTitle = `Nutrition & Food Science${paperNumLabel ? ' ' + paperNumLabel : ''} (${cleanStream})`;
     return [{
       baseSubjectCode,
-      paperCode: baseSubjectCode,
-      paperTitle: `Science (${cleanStream})`,
+      paperCode,
+      paperTitle,
       paperType,
       requiresComputer,
       eligibleStudentCodes: [baseSubjectCode],
     }];
   }
 
-  // 9. Geography
+  // 10. Computing / Computer Applications
+  if (upperSubj.includes('COMPUTING') || upperSubj.includes('COMPUTER APPLICATIONS') || upperSubj.includes('CPA')) {
+    const baseSubjectCode = `Computing - ${cleanStream}`;
+    const paperCode = suffix ? `${baseSubjectCode}${suffix}` : baseSubjectCode;
+    const paperTitle = `Computing${paperNumLabel ? ' ' + paperNumLabel : ''} (${cleanStream})`;
+    return [{
+      baseSubjectCode,
+      paperCode,
+      paperTitle,
+      paperType,
+      requiresComputer: true,
+      eligibleStudentCodes: [baseSubjectCode],
+    }];
+  }
+
+  // 11. Design & Technology
+  if (upperSubj.includes('DESIGN & TECHNOLOGY') || upperSubj.includes('DESIGN AND TECHNOLOGY') || upperSubj.includes('D&T')) {
+    const baseSubjectCode = `D&T - ${cleanStream}`;
+    const paperCode = suffix ? `${baseSubjectCode}${suffix}` : baseSubjectCode;
+    const paperTitle = `Design & Technology${paperNumLabel ? ' ' + paperNumLabel : ''} (${cleanStream})`;
+    return [{
+      baseSubjectCode,
+      paperCode,
+      paperTitle,
+      paperType,
+      requiresComputer,
+      eligibleStudentCodes: [baseSubjectCode],
+    }];
+  }
+
+  // 12. Art
+  if (upperSubj.startsWith('ART') || upperSubj.includes(' ART')) {
+    const baseSubjectCode = `Art - ${cleanStream}`;
+    const paperCode = suffix ? `${baseSubjectCode}${suffix}` : baseSubjectCode;
+    const paperTitle = `Art${paperNumLabel ? ' ' + paperNumLabel : ''} (${cleanStream})`;
+    return [{
+      baseSubjectCode,
+      paperCode,
+      paperTitle,
+      paperType,
+      requiresComputer,
+      eligibleStudentCodes: [baseSubjectCode],
+    }];
+  }
+
+  // 13. Social Studies
+  if (upperSubj.includes('SOCIAL STUDIES') || upperSubj.startsWith('SS')) {
+    const baseSubjectCode = `SS - ${cleanStream}`;
+    const paperCode = suffix ? `${baseSubjectCode}${suffix}` : baseSubjectCode;
+    const paperTitle = `Social Studies (${cleanStream})`;
+    return [{
+      baseSubjectCode,
+      paperCode,
+      paperTitle,
+      paperType,
+      requiresComputer,
+      eligibleStudentCodes: [baseSubjectCode],
+    }];
+  }
+
+  // 14. Chemistry
+  if (upperSubj.includes('CHEMISTRY') || upperSubj.includes('CHEM')) {
+    const baseSubjectCode = upperSubj.includes('SCIENCE') ? `Sci(Chem) - ${cleanStream}` : `Chemistry - ${cleanStream}`;
+    const paperCode = suffix ? `${baseSubjectCode}${suffix}` : baseSubjectCode;
+    return [{
+      baseSubjectCode,
+      paperCode,
+      paperTitle: `${cleanSubj} (${cleanStream})`,
+      paperType,
+      requiresComputer,
+      eligibleStudentCodes: [baseSubjectCode],
+    }];
+  }
+
+  // 15. Physics
+  if (upperSubj.includes('PHYSICS') || upperSubj.includes('PHY')) {
+    const baseSubjectCode = upperSubj.includes('SCIENCE') ? `Sci(Phy) - ${cleanStream}` : `Physics - ${cleanStream}`;
+    const paperCode = suffix ? `${baseSubjectCode}${suffix}` : baseSubjectCode;
+    return [{
+      baseSubjectCode,
+      paperCode,
+      paperTitle: `${cleanSubj} (${cleanStream})`,
+      paperType,
+      requiresComputer,
+      eligibleStudentCodes: [baseSubjectCode],
+    }];
+  }
+
+  // 16. Biology
+  if (upperSubj.includes('BIOLOGY') || upperSubj.includes('BIO')) {
+    const baseSubjectCode = upperSubj.includes('SCIENCE') ? `Sci(Bio) - ${cleanStream}` : `Biology - ${cleanStream}`;
+    const paperCode = suffix ? `${baseSubjectCode}${suffix}` : baseSubjectCode;
+    return [{
+      baseSubjectCode,
+      paperCode,
+      paperTitle: `${cleanSubj} (${cleanStream})`,
+      paperType,
+      requiresComputer,
+      eligibleStudentCodes: [baseSubjectCode],
+    }];
+  }
+
+  // 17. Science generic
+  if (upperSubj.includes('SCIENCE') || upperSubj.startsWith('SCI')) {
+    const baseSubjectCode = `Sci - ${cleanStream}`;
+    const paperCode = suffix ? `${baseSubjectCode}${suffix}` : baseSubjectCode;
+    return [{
+      baseSubjectCode,
+      paperCode,
+      paperTitle: `Science${paperNumLabel ? ' ' + paperNumLabel : ''} (${cleanStream})`,
+      paperType,
+      requiresComputer,
+      eligibleStudentCodes: [baseSubjectCode],
+    }];
+  }
+
+  // 18. Geography
   if (upperSubj.includes('GEOGRAPHY') || upperSubj.includes('GEOG')) {
     const baseSubjectCode = `HUM(GEOG) - ${cleanStream}`;
     return [{
@@ -419,7 +564,7 @@ export function resolveInternalSubjectMapping(
     }];
   }
 
-  // 10. History
+  // 19. History
   if (upperSubj.includes('HISTORY') || upperSubj.includes('HIST')) {
     const baseSubjectCode = `HUM(HIST) - ${cleanStream}`;
     return [{
@@ -432,7 +577,7 @@ export function resolveInternalSubjectMapping(
     }];
   }
 
-  // 11. English Literature
+  // 20. English Literature
   if (upperSubj.includes('LITERATURE') || upperSubj.includes('LIT')) {
     const baseSubjectCode = `HUM(LIT E) - ${cleanStream}`;
     return [{
@@ -449,12 +594,22 @@ export function resolveInternalSubjectMapping(
   const fallbackBase = `${cleanSubj} - ${cleanStream}`;
   return [{
     baseSubjectCode: fallbackBase,
-    paperCode: fallbackBase,
+    paperCode: suffix ? `${fallbackBase}${suffix}` : fallbackBase,
     paperTitle: `${cleanSubj} (${cleanStream})`,
     paperType,
     requiresComputer,
     eligibleStudentCodes: [fallbackBase, cleanSubj],
   }];
+}
+
+/**
+ * Parses an internal school timetable PDF (such as Canberra Secondary School 2026 EOY timetable)
+ */
+interface GridLine {
+  y: number;
+  x1: number;
+  x2: number;
+  type: 'FULL_DAY_ROW' | 'STREAM_ROW' | 'SUBJECT_ROW' | 'OTHER';
 }
 
 /**
@@ -468,181 +623,338 @@ export async function parseInternalPdfTimetable(file: File): Promise<InternalTim
   const papersMap = new Map<string, ExamPaper>();
   let rowCount = 0;
   let lastCarriedDate = '';
+  let carryLevel = '';
 
   for (let p = 1; p <= doc.numPages; p++) {
     const page = await doc.getPage(p);
     const content = await page.getTextContent();
-    const rows: { y: number; items: { x: number; str: string }[] }[] = [];
+    const ops = await page.getOperatorList();
 
     const pageText = content.items.map((i: any) => i.str || '').join(' ').toUpperCase();
-    let pageLevel = '';
-    const lvlMatch = pageText.match(/\b(SECONDARY\s*[1-6]|SEC\s*[1-6]|PRIMARY\s*[1-6]|PRI\s*[1-6]|JC\s*[1-2]|LEVEL\s*[1-6]|GRADE\s*[1-6]|YEAR\s*[1-6])\b/i);
+    let pageLevel = carryLevel;
+    const lvlMatch = pageText.match(
+      /\b(SECONDARY\s*[1-6]|SEC\s*[1-6]|PRIMARY\s*[1-6]|PRI\s*[1-6]|JC\s*[1-2]|LEVEL\s*[1-6]|GRADE\s*[1-6]|YEAR\s*[1-6])\b/i
+    );
     if (lvlMatch) {
       const num = extractLevelNumber(lvlMatch[1]);
       if (num) {
         if (/PRI/i.test(lvlMatch[1])) pageLevel = `Primary ${num}`;
         else if (/JC/i.test(lvlMatch[1])) pageLevel = `JC ${num}`;
         else pageLevel = `Secondary ${num}`;
+        carryLevel = pageLevel;
       }
     }
 
-    for (const rawItem of content.items) {
-      const it = rawItem as { str: string; transform: number[] };
-      if (!it.str || !it.str.trim()) continue;
-      const y = Math.round(it.transform[5]);
-      const x = Math.round(it.transform[4]);
+    // Extract horizontal grid lines from vector graphics (e.g. Word / PDF tables)
+    const lines: GridLine[] = [];
+    for (let i = 0; i < ops.fnArray.length; i++) {
+      if (ops.fnArray[i] === pdfjsLib.OPS.constructPath) {
+        const bbox = ops.argsArray[i][2];
+        if (bbox && bbox.length === 4) {
+          const minX = Math.round(bbox[0]);
+          const minY = Math.round(bbox[1]);
+          const maxX = Math.round(bbox[2]);
+          const maxY = Math.round(bbox[3]);
+          const h = maxY - minY;
+          const w = maxX - minX;
 
-      let r = rows.find((row) => Math.abs(row.y - y) <= 4);
-      if (!r) {
-        r = { y, items: [] };
-        rows.push(r);
-      }
-      r.items.push({ x, str: it.str.trim() });
-    }
-
-    // Sort descending by Y (top of page to bottom)
-    rows.sort((a, b) => b.y - a.y);
-
-    // 1. Extract and segment all date anchors on this page
-    interface DateAnchor {
-      y: number;
-      isoDate: string;
-      rawDate: string;
-    }
-
-    const rawAnchors: DateAnchor[] = [];
-    for (const r of rows) {
-      r.items.sort((a, b) => a.x - b.x);
-      const rowText = r.items.map((i) => i.str).join(' ');
-      const d = extractDateFromText(rowText);
-      if (d) {
-        rawAnchors.push({ y: r.y, isoDate: d.isoDate, rawDate: d.rawDate });
-      }
-    }
-
-    // Deduplicate date anchors: group anchors with same date or very close Y
-    const dateAnchors: DateAnchor[] = [];
-    for (const anchor of rawAnchors) {
-      const existing = dateAnchors.find(
-        (a) => a.isoDate === anchor.isoDate || Math.abs(a.y - anchor.y) <= 15
-      );
-      if (!existing) {
-        dateAnchors.push(anchor);
-      }
-    }
-    dateAnchors.sort((a, b) => b.y - a.y);
-
-    let pageCurrentStream = 'G3';
-
-    for (const r of rows) {
-      const rowText = r.items.map((i) => i.str).join(' ');
-      const upperRow = rowText.toUpperCase();
-
-      // Check if this row mentions a specific level
-      const rowLevelMatch = rowText.match(/\b(Secondary\s*[1-6]|Sec\s*[1-6]|Primary\s*[1-6]|Pri\s*[1-6]|JC\s*[1-2])\b/i);
-      if (rowLevelMatch) {
-        const num = extractLevelNumber(rowLevelMatch[1]);
-        if (num) {
-          if (/PRI/i.test(rowLevelMatch[1])) pageLevel = `Primary ${num}`;
-          else if (/JC/i.test(rowLevelMatch[1])) pageLevel = `JC ${num}`;
-          else pageLevel = `Secondary ${num}`;
+          if (h <= 2 && w >= 50) {
+            let type: GridLine['type'] = 'OTHER';
+            if (minX <= 55 && maxX >= 430) type = 'FULL_DAY_ROW';
+            else if (minX <= 125 && maxX >= 430) type = 'STREAM_ROW';
+            else if (minX <= 145 && maxX >= 430) type = 'SUBJECT_ROW';
+            lines.push({ y: minY, x1: minX, x2: maxX, type });
+          }
         }
       }
+    }
+    lines.sort((a, b) => b.y - a.y);
 
-      // Skip headers and non-exam remarks
-      if (
-        upperRow.includes('END-OF-YEAR EXAMINATION') ||
-        upperRow.includes('DEAR STUDENTS') ||
-        upperRow.includes('PLEASE NOTE') ||
-        upperRow.includes('NORMAL LESSONS') ||
-        upperRow.includes('MARKING DAY') ||
-        upperRow.includes('HBL') ||
-        upperRow.includes('NO PAPER') ||
-        upperRow.includes('WE WISH YOU ALL') ||
-        upperRow.includes('EXAM COMMITTEE') ||
-        upperRow.startsWith('S/NO.') ||
-        upperRow.includes('CANBERRA SECONDARY')
-      ) {
-        continue;
+    const dedupLines: GridLine[] = [];
+    for (const l of lines) {
+      const existing = dedupLines.find((x) => Math.abs(x.y - l.y) <= 2);
+      if (!existing) {
+        dedupLines.push(l);
+      } else if (l.type === 'FULL_DAY_ROW') {
+        existing.type = 'FULL_DAY_ROW';
       }
+    }
+    dedupLines.sort((a, b) => b.y - a.y);
 
-      // Check for time range pattern: e.g. "0815 - 0945", "1100 - 1230", "08:15 - 09:45"
-      const timeInfo = parseTimeRange(rowText);
-      if (!timeInfo) {
-        continue;
+    const dayLines = dedupLines.filter((l) => l.type === 'FULL_DAY_ROW');
+
+    const items = (content.items as any[])
+      .map((i) => ({
+        str: (i.str || '').trim(),
+        x: Math.round(i.transform[4]),
+        y: Math.round(i.transform[5]),
+      }))
+      .filter((i) => i.str.length > 0);
+
+    // Strategy 1: Grid-based table cell segmentation (exact for bordered school tables)
+    if (dayLines.length >= 2) {
+      for (let d = 0; d < dayLines.length - 1; d++) {
+        const topY = dayLines[d].y;
+        const bottomY = dayLines[d + 1].y;
+
+        const dayItems = items.filter((it) => it.y < topY && it.y >= bottomY);
+        if (dayItems.length === 0) continue;
+
+        const dayText = dayItems.map((i) => i.str).join(' ');
+        const upperDay = dayText.toUpperCase();
+        if (
+          upperDay.includes('NORMAL LESSONS') ||
+          upperDay.includes('MARKING DAY') ||
+          upperDay.includes('HBL')
+        ) {
+          continue;
+        }
+
+        let dayDate = '';
+        const dateMatch = extractDateFromText(dayText);
+        if (dateMatch) dayDate = dateMatch.isoDate;
+        else if (lastCarriedDate) dayDate = lastCarriedDate;
+        if (!dayDate) continue;
+        lastCarriedDate = dayDate;
+
+        const innerLines = dedupLines.filter((l) => l.y < topY && l.y > bottomY);
+        const streamLines = innerLines.filter((l) => l.type === 'STREAM_ROW');
+
+        const streamIntervals: { top: number; bottom: number; stream: string }[] = [];
+        const streamSplitY = [topY, ...streamLines.map((l) => l.y), bottomY];
+
+        for (let s = 0; s < streamSplitY.length - 1; s++) {
+          const sTop = streamSplitY[s];
+          const sBtm = streamSplitY[s + 1];
+          const sItems = dayItems.filter((it) => it.y < sTop && it.y >= sBtm);
+
+          const sLabel = sItems.find(
+            (it) => it.x >= 100 && it.x <= 135 && /^(G1|G2|G3|EXP|NA|NT)$/i.test(it.str)
+          );
+          const streamName = sLabel
+            ? sLabel.str.toUpperCase()
+            : (s === 0 ? 'G3' : s === 1 ? 'G2' : 'G1');
+
+          streamIntervals.push({ top: sTop, bottom: sBtm, stream: streamName });
+        }
+
+        for (const sInt of streamIntervals) {
+          const sItems = dayItems.filter((it) => it.y < sInt.top && it.y >= sInt.bottom);
+          if (sItems.length === 0) continue;
+          const sText = sItems.map((i) => i.str).join(' ');
+          if (sText.toUpperCase().includes('NO PAPER')) continue;
+
+          const subjLines = innerLines.filter(
+            (l) => l.type === 'SUBJECT_ROW' && l.y < sInt.top && l.y > sInt.bottom
+          );
+          const rowSplitY = [sInt.top, ...subjLines.map((l) => l.y), sInt.bottom];
+
+          for (let r = 0; r < rowSplitY.length - 1; r++) {
+            const rTop = rowSplitY[r];
+            const rBtm = rowSplitY[r + 1];
+            const cellItems = sItems.filter((it) => it.y < rTop && it.y >= rBtm);
+            if (cellItems.length === 0) continue;
+
+            const cellText = cellItems.map((i) => i.str).join(' ');
+            const timeInfo = parseTimeRange(cellText);
+            if (!timeInfo) continue;
+
+            const hasEExam =
+              /\b(?:e-exam|e-examination)\b/i.test(cellText) ||
+              /\(e-exam/i.test(cellText) ||
+              /\(e-examination/i.test(cellText) ||
+              cellText.toUpperCase().includes('COMPUTER LAB');
+
+            const venueStr = cellText.toUpperCase().includes('COMPUTER LAB')
+              ? 'Computer Labs'
+              : 'Classrooms';
+            const durationMatch = cellText.match(
+              /(\d+\s*(?:hr|hrs|hour|hours))?(?:\s*(\d+)\s*(?:min|mins|minutes))?/i
+            );
+            const durationRaw = durationMatch ? durationMatch[0] : '';
+            const durationMins = durationRaw
+              ? parseDurationMins(durationRaw, timeInfo.durationMins)
+              : timeInfo.durationMins;
+
+            let subjStr = cellItems
+              .filter((i) => i.x >= 130 && i.x <= 285)
+              .map((i) => i.str)
+              .join(' ');
+            subjStr = subjStr
+              .replace(/\(e-Examination\)|\(e-Exam\)/gi, '')
+              .replace(/Classrooms|Computer Labs/gi, '')
+              .trim();
+
+            if (!subjStr || subjStr.length < 2) continue;
+
+            const mappings = resolveInternalSubjectMapping(sInt.stream, subjStr);
+            for (const mapping of mappings) {
+              const requiresComputer = hasEExam || mapping.requiresComputer;
+              const levelSlug = pageLevel ? pageLevel.toLowerCase().replace(/[^a-z0-9]/g, '') : 'all';
+              const paperId = `paper-${levelSlug}-${dayDate}-${mapping.paperCode.replace(/[^A-Za-z0-9]/g, '-')}`;
+
+              if (!papersMap.has(paperId)) {
+                papersMap.set(paperId, {
+                  id: paperId,
+                  code: mapping.paperCode,
+                  title: mapping.paperTitle,
+                  durationMins,
+                  type: mapping.paperType,
+                  requiresComputer,
+                  allowCombine: false,
+                  date: dayDate,
+                  startTime: timeInfo.startTime,
+                  level: pageLevel || undefined,
+                  stream: sInt.stream,
+                  baseSubjectCode: mapping.baseSubjectCode,
+                  venueType: venueStr,
+                });
+                rowCount++;
+              }
+            }
+          }
+        }
       }
+    } else {
+      // Strategy 2: Fallback text-based row parsing with stream proximity grouping
+      const rows: { y: number; items: typeof items }[] = [];
+      for (const it of items) {
+        let r = rows.find((row) => Math.abs(row.y - it.y) <= 3);
+        if (!r) {
+          r = { y: it.y, items: [] };
+          rows.push(r);
+        }
+        r.items.push(it);
+      }
+      rows.sort((a, b) => b.y - a.y);
+      for (const r of rows) r.items.sort((a, b) => a.x - b.x);
 
-      // Determine date for this session row based on vertical bounding box segmentation
-      let sessionDate = '';
-      if (dateAnchors.length === 1) {
-        sessionDate = dateAnchors[0].isoDate;
-      } else if (dateAnchors.length > 1) {
-        // Compute split midpoints between consecutive date anchors
-        // dateAnchors sorted descending by Y: A[0] (top), A[1] (middle), A[2] (bottom)
+      interface DateAnchor {
+        y: number;
+        isoDate: string;
+      }
+      const dateAnchors: DateAnchor[] = [];
+      for (const r of rows) {
+        const rowText = r.items.map((i) => i.str).join(' ');
+        const d = extractDateFromText(rowText);
+        if (d && !dateAnchors.find((a) => a.isoDate === d.isoDate || Math.abs(a.y - r.y) <= 15)) {
+          dateAnchors.push({ y: r.y, isoDate: d.isoDate });
+        }
+      }
+      dateAnchors.sort((a, b) => b.y - a.y);
+
+      const streamLabels: { y: number; stream: string }[] = [];
+      for (const it of items) {
+        if (it.x >= 100 && it.x <= 135 && /^(G1|G2|G3|EXP|NA|NT)$/i.test(it.str)) {
+          streamLabels.push({ y: it.y, stream: it.str.toUpperCase() });
+        }
+      }
+      streamLabels.sort((a, b) => b.y - a.y);
+
+      const getDateForY = (y: number): string => {
+        if (dateAnchors.length === 0) return lastCarriedDate;
+        if (dateAnchors.length === 1) return dateAnchors[0].isoDate;
         const boundaries: number[] = [];
         for (let i = 0; i < dateAnchors.length - 1; i++) {
           boundaries.push((dateAnchors[i].y + dateAnchors[i + 1].y) / 2);
         }
+        if (y > boundaries[0]) return dateAnchors[0].isoDate;
+        if (y <= boundaries[boundaries.length - 1]) return dateAnchors[dateAnchors.length - 1].isoDate;
+        for (let i = 0; i < boundaries.length; i++) {
+          const top = boundaries[i];
+          const btm = i + 1 < boundaries.length ? boundaries[i + 1] : -Infinity;
+          if (y <= top && y > btm) return dateAnchors[i + 1].isoDate;
+        }
+        return dateAnchors[0].isoDate;
+      };
 
-        if (r.y > boundaries[0]) {
-          sessionDate = dateAnchors[0].isoDate;
-        } else if (r.y <= boundaries[boundaries.length - 1]) {
-          sessionDate = dateAnchors[dateAnchors.length - 1].isoDate;
-        } else {
-          for (let i = 0; i < boundaries.length; i++) {
-            const topBoundary = boundaries[i];
-            const bottomBoundary = i + 1 < boundaries.length ? boundaries[i + 1] : -Infinity;
-            if (r.y <= topBoundary && r.y > bottomBoundary) {
-              sessionDate = dateAnchors[i + 1].isoDate;
-              break;
+      for (const r of rows) {
+        const rowText = r.items.map((i) => i.str).join(' ');
+        const upperRow = rowText.toUpperCase();
+
+        if (
+          upperRow.includes('END-OF-YEAR EXAMINATION') ||
+          upperRow.includes('NORMAL LESSONS') ||
+          upperRow.includes('MARKING DAY') ||
+          upperRow.includes('HBL') ||
+          upperRow.includes('NO PAPER') ||
+          upperRow.startsWith('S/NO.') ||
+          upperRow.includes('CANBERRA SECONDARY')
+        ) {
+          continue;
+        }
+
+        const timeInfo = parseTimeRange(rowText);
+        if (!timeInfo) continue;
+
+        const sessionDate = getDateForY(r.y);
+        if (!sessionDate) continue;
+        lastCarriedDate = sessionDate;
+
+        const blockStreams = streamLabels.filter((sl) => getDateForY(sl.y) === sessionDate);
+        let assignedStream = 'G3';
+        if (blockStreams.length === 1) {
+          assignedStream = blockStreams[0].stream;
+        } else if (blockStreams.length > 1) {
+          const sBoundaries: number[] = [];
+          for (let i = 0; i < blockStreams.length - 1; i++) {
+            sBoundaries.push((blockStreams[i].y + blockStreams[i + 1].y) / 2);
+          }
+          if (r.y > sBoundaries[0]) {
+            assignedStream = blockStreams[0].stream;
+          } else if (r.y <= sBoundaries[sBoundaries.length - 1]) {
+            assignedStream = blockStreams[blockStreams.length - 1].stream;
+          } else {
+            for (let i = 0; i < sBoundaries.length; i++) {
+              const top = sBoundaries[i];
+              const btm = i + 1 < sBoundaries.length ? sBoundaries[i + 1] : -Infinity;
+              if (r.y <= top && r.y > btm) {
+                assignedStream = blockStreams[i + 1].stream;
+                break;
+              }
             }
           }
         }
-      } else {
-        sessionDate = lastCarriedDate;
-      }
 
-      if (!sessionDate) {
-        continue;
-      }
-      lastCarriedDate = sessionDate;
+        const hasEExam =
+          /\b(?:e-exam|e-examination)\b/i.test(rowText) ||
+          /\(e-exam/i.test(rowText) ||
+          /\(e-examination/i.test(rowText) ||
+          upperRow.includes('COMPUTER LAB');
 
-      // Check all streams mentioned on this row: e.g. G1, G2, G3
-      const rowStreams = Array.from(rowText.matchAll(/\b(G1|G2|G3|EXP|NA|NT)\b/gi)).map((m) => m[1].toUpperCase());
-      const targetStreams = rowStreams.length > 0 ? Array.from(new Set(rowStreams)) : [pageCurrentStream];
-      if (rowStreams.length === 1) {
-        pageCurrentStream = rowStreams[0];
-      }
+        const venueStr = upperRow.includes('COMPUTER LAB') ? 'Computer Labs' : 'Classrooms';
+        const durationMatch = rowText.match(
+          /(\d+\s*(?:hr|hrs|hour|hours))?(?:\s*(\d+)\s*(?:min|mins|minutes))?/i
+        );
+        const durationRaw = durationMatch ? durationMatch[0] : '';
+        const durationMins = durationRaw
+          ? parseDurationMins(durationRaw, timeInfo.durationMins)
+          : timeInfo.durationMins;
 
-      // Check duration: e.g. "1 hr 30 mins", "2 hrs", "30 mins", "40 mins"
-      const durationMatch = rowText.match(/(\d+\s*(?:hr|hrs|hour|hours))?(?:\s*(\d+)\s*(?:min|mins|minutes))?/i);
-      const durationRaw = durationMatch ? durationMatch[0] : '';
+        let subjStr = r.items
+          .filter((i) => i.x >= 130 && i.x <= 285)
+          .map((i) => i.str)
+          .join(' ');
+        if (!subjStr) {
+          subjStr = rowText
+            .replace(/Wednesday|Thursday|Friday|Monday|Tuesday|Saturday|Sunday/gi, '')
+            .replace(/\d{1,2}[:.]?\d{2}\s*-\s*\d{1,2}[:.]?\d{2}/g, '')
+            .replace(durationRaw, '')
+            .replace(/Classrooms|Computer Labs/gi, '')
+            .replace(/\b(G1|G2|G3|EXP|NA|NT)\b/gi, '')
+            .replace(/^\s*\d+\s+/, '')
+            .trim();
+        }
+        subjStr = subjStr
+          .replace(/\(e-Examination\)|\(e-Exam\)/gi, '')
+          .replace(/Classrooms|Computer Labs/gi, '')
+          .trim();
 
-      // Check venue: "Classrooms" or "Computer Labs"
-      const venueStr = upperRow.includes('COMPUTER LAB') ? 'Computer Labs' : 'Classrooms';
+        if (!subjStr || subjStr.length < 2) continue;
 
-      // Extract subject title by filtering out Date, Stream, Duration, Time, Venue
-      let remaining = rowText;
-      const extractedDate = extractDateFromText(rowText);
-      if (extractedDate) remaining = remaining.replace(extractedDate.rawDate, '');
-      remaining = remaining
-        .replace(/Wednesday|Thursday|Friday|Monday|Tuesday|Saturday|Sunday/gi, '')
-        .replace(/\d{1,2}[:.]?\d{2}\s*-\s*\d{1,2}[:.]?\d{2}/g, '')
-        .replace(durationRaw, '')
-        .replace(/Classrooms|Computer Labs/gi, '')
-        .replace(/\b(G1|G2|G3|EXP|NA|NT)\b/gi, '')
-        .replace(/^\s*\d+\s+/, '') // leading s/no
-        .trim();
-
-      const subjectTitle = remaining.replace(/\s{2,}/g, ' ').trim();
-      if (!subjectTitle || subjectTitle.length < 2) continue;
-
-      for (const st of targetStreams) {
-        const mappings = resolveInternalSubjectMapping(st, subjectTitle);
+        const mappings = resolveInternalSubjectMapping(assignedStream, subjStr);
         for (const mapping of mappings) {
-          const durationMins = durationRaw ? parseDurationMins(durationRaw, timeInfo.durationMins) : timeInfo.durationMins;
-          const requiresComputer = venueStr === 'Computer Labs' || mapping.requiresComputer;
-
+          const requiresComputer = hasEExam || mapping.requiresComputer;
           const levelSlug = pageLevel ? pageLevel.toLowerCase().replace(/[^a-z0-9]/g, '') : 'all';
           const paperId = `paper-${levelSlug}-${sessionDate}-${mapping.paperCode.replace(/[^A-Za-z0-9]/g, '-')}`;
 
@@ -658,7 +970,7 @@ export async function parseInternalPdfTimetable(file: File): Promise<InternalTim
               date: sessionDate,
               startTime: timeInfo.startTime,
               level: pageLevel || undefined,
-              stream: st,
+              stream: assignedStream,
               baseSubjectCode: mapping.baseSubjectCode,
               venueType: venueStr,
             });
@@ -734,7 +1046,14 @@ export async function parseInternalSpreadsheetTimetable(
       paperType = 'LISTENING_COMP';
     }
 
-    const requiresComputer = compRaw === 'yes' || compRaw === 'true' || compRaw === '1';
+    const requiresComputer =
+      compRaw === 'yes' ||
+      compRaw === 'true' ||
+      compRaw === '1' ||
+      mode.includes('E-EXAM') ||
+      mode.includes('COMPUTER') ||
+      title.toUpperCase().includes('E-EXAM') ||
+      title.toUpperCase().includes('COMPUTER');
     const levelSlug = rawLevel ? rawLevel.toLowerCase().replace(/[^a-z0-9]/g, '') : 'all';
 
     // If explicit paper code provided
@@ -867,7 +1186,7 @@ export function syncInternalCandidateEnrollments(
 
     for (const paper of papers) {
       // If both candidate and paper have known academic level numbers, ensure they match!
-      const paperLevelNum = extractLevelNumber(paper.level);
+      const paperLevelNum = extractLevelNumber(paper.level) ?? extractLevelNumber(paper.title);
       if (candLevelNum !== undefined && paperLevelNum !== undefined && candLevelNum !== paperLevelNum) {
         continue;
       }

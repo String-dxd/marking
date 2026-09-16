@@ -84,6 +84,54 @@ export function getPaperLevel(paper: ExamPaper, allCandidates: Candidate[] = [])
 }
 
 /**
+ * Returns all candidate-facing match keys for a paper.
+ * Covers: paper.code, paper.baseSubjectCode, and the slash-prefix of paper.code.
+ * This bridges the gap where internal timetable codes ("EL - G3/P1") differ from
+ * internal mark-sheet subject codes ("English Language" or "EL - G3").
+ */
+function getPaperMatchKeys(paper: ExamPaper): string[] {
+  const keys = new Set<string>();
+  keys.add(paper.code);
+  if (paper.baseSubjectCode) keys.add(paper.baseSubjectCode);
+  const slashBase = paper.code.split('/')[0];
+  if (slashBase) keys.add(slashBase);
+  return Array.from(keys);
+}
+
+/**
+ * Returns true if the candidate holds any subject code that matches this paper.
+ */
+function candidateHasMatchForPaper(cand: Candidate, paper: ExamPaper): boolean {
+  const matchKeys = getPaperMatchKeys(paper);
+  return cand.subjectCodes.some((sc) => matchKeys.includes(sc));
+}
+
+/**
+ * Checks whether a candidate is genuinely enrolled and eligible for an exam paper,
+ * strictly verifying that academic levels match if known (e.g. Sec 1 student cannot take Sec 2 paper).
+ */
+export function isCandidateEligibleForPaper(cand: Candidate, paper: ExamPaper): boolean {
+  if (!candidateHasMatchForPaper(cand, paper)) return false;
+
+  const paperLevelStr = paper.level || paper.title;
+  const paperLevelNum = extractLevelNumber(paper.level) ?? extractLevelNumber(paper.title);
+
+  if (paperLevelNum !== undefined) {
+    const candLevelNum = extractLevelNumber(cand.academicLevel) ?? extractLevelNumber(cand.classGroup);
+    if (candLevelNum !== undefined && candLevelNum !== paperLevelNum) {
+      return false;
+    }
+    const paperIsPri = /Pri/i.test(paperLevelStr);
+    const candIsPri = /Pri/i.test(cand.academicLevel || '') || /^P[1-6]/i.test(cand.classGroup || '');
+    if (paperIsPri !== candIsPri && (paperIsPri || candIsPri)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
  * Discovers and extracts all distinct academic levels across timetable papers and candidates
  */
 export function getDistinctLevels(papers: ExamPaper[] = [], candidates: Candidate[] = []): string[] {
@@ -244,10 +292,23 @@ function isBackToBack(precedingPaper: ExamPaper, currentPaper: ExamPaper): boole
 
 /**
  * Checks if two papers happen during overlapping duration on the same day.
+ *
+ * Level guard: if both papers carry an explicit, distinct academic level number
+ * (e.g. Sec 1 vs Sec 2), they belong to entirely different cohorts and are NOT
+ * concurrent from any individual candidate's perspective — even if their timeslots
+ * overlap on the calendar.  This prevents false conflicts when multi-level
+ * timetables (Sec 1, Sec 2, Sec 3) are loaded together.
  */
 export function arePapersConcurrent(paperA: ExamPaper, paperB: ExamPaper): boolean {
   if (paperA.id === paperB.id) return false;
   if (paperA.date !== paperB.date) return false;
+
+  // Level guard: papers at different academic levels never conflict for any single candidate
+  const levelA = extractLevelNumber(paperA.level) ?? extractLevelNumber(paperA.title);
+  const levelB = extractLevelNumber(paperB.level) ?? extractLevelNumber(paperB.title);
+  if (levelA !== undefined && levelB !== undefined && levelA !== levelB) {
+    return false;
+  }
 
   const startA = parseTimeToMinutes(paperA.startTime);
   const endA = startA + (paperA.durationMins || 60);
@@ -274,10 +335,24 @@ export function runDeterministicAllocation(
   const warnings: string[] = [];
   const allocations: SeatAllocation[] = [];
 
-  // Filter candidates taking this paper
-  const candidatesForPaper = allCandidates.filter((c) =>
-    c.subjectCodes.includes(targetPaper.code)
-  );
+  // Resolve target paper's academic level number
+  let paperLevelNum = extractLevelNumber(targetPaper.level) ?? extractLevelNumber(targetPaper.title);
+
+  // If level not explicit on paper, check enrolled candidates taking this paper
+  if (paperLevelNum === undefined) {
+    const candidateLevels = allCandidates
+      .filter((c) => c.subjectCodes.includes(targetPaper.code))
+      .map((c) => extractLevelNumber(c.academicLevel) ?? extractLevelNumber(c.classGroup))
+      .filter((n): n is number => n !== undefined);
+    if (candidateLevels.length > 0) {
+      paperLevelNum = candidateLevels[0];
+    }
+  }
+
+  const targetLevelNumber = paperLevelNum;
+
+  // Filter candidates taking this paper (must match subject code AND academic level if paper level is known)
+  const candidatesForPaper = allCandidates.filter((c) => isCandidateEligibleForPaper(c, targetPaper));
 
   if (candidatesForPaper.length === 0) {
     return {
@@ -292,13 +367,6 @@ export function runDeterministicAllocation(
   const isInternal = candidatesForPaper.some(
     (c) => Boolean(c.classGroup) || Boolean(c.formTeacher) || (c.indexNumber && c.indexNumber.length < 4)
   );
-
-  // Extract target academic level (e.g. 1 for Secondary 1, 4 for Sec 4)
-  const paperLevelNum = extractLevelNumber(targetPaper.level);
-  const candLevelNum = candidatesForPaper
-    .map((c) => extractLevelNumber(c.academicLevel) || extractLevelNumber(c.classGroup))
-    .find((n) => n !== undefined);
-  const targetLevelNumber = paperLevelNum ?? candLevelNum;
 
   // Sort candidates:
   // For internal exams: 1. Subject & Stream -> 2. Class Group -> 3. Register Number (natural numeric sort)
@@ -338,9 +406,11 @@ export function runDeterministicAllocation(
   );
 
   // Check for candidate timetable clash (same candidate taking 2 concurrent papers)
+  // Uses candidateHasMatchForPaper so that internal mark-sheet subject codes (e.g. "English Language")
+  // are correctly matched against timetable paper codes ("EL - G3/P1") and base codes ("EL - G3").
   const clashDetails: { candidate: Candidate; clashingPapers: ExamPaper[] }[] = [];
   sortedCandidates.forEach((cand) => {
-    const clashing = concurrentPapers.filter((cp) => cand.subjectCodes.includes(cp.code));
+    const clashing = concurrentPapers.filter((cp) => candidateHasMatchForPaper(cand, cp));
     if (clashing.length > 0) {
       clashDetails.push({ candidate: cand, clashingPapers: clashing });
     }
@@ -393,14 +463,83 @@ export function runDeterministicAllocation(
       .map((a) => a.venueId)
   );
 
+  // Helper to distinguish communal halls (School Hall, Auditorium, ISH) from classrooms
+  const isCommunalHall = (venue: Venue): boolean => {
+    const activeDesks = venue.seatGrid ? venue.seatGrid.flat().filter((s) => s.isActive).length : venue.rows * venue.cols;
+    return (
+      !classifyVenue(venue.name).isFormClassroom &&
+      (/Hall|Auditorium|Gymnasium|Indoor Sports Hall|ISH/i.test(venue.name) || activeDesks >= 60)
+    );
+  };
+
+  // Collect all distinct academic levels running concurrently in this time slot
+  const concurrentLevelNumbers = new Set(
+    concurrentPapers
+      .map((cp) => extractLevelNumber(cp.level) ?? extractLevelNumber(cp.title))
+      .filter((n): n is number => n !== undefined)
+  );
+
   const isVenueBlocked = (venueId: string): boolean => {
-    // Audio / Oral papers must have dedicated, acoustically isolated rooms
+    const venueObj = allVenues.find((v) => v.id === venueId);
+    if (!venueObj) return true;
+
+    // 1. Audio / Oral papers must have dedicated, acoustically isolated rooms
     if (isTargetAudioOrOral && venuesUsedByConcurrent.has(venueId)) {
       return true;
     }
     if (venuesUsedByAudioOrOral.has(venueId)) {
       return true;
     }
+
+    const classification = classifyVenue(venueObj.name, targetLevelNumber);
+
+    // 2. If this venue is a form classroom of another academic level (Tier 3),
+    // and that other level is running an exam concurrently in this slot:
+    // It is strictly reserved for that other level and BLOCKED for targetPaper!
+    if (
+      classification.isFormClassroom &&
+      classification.levelNumber !== undefined &&
+      targetLevelNumber !== undefined &&
+      classification.levelNumber !== targetLevelNumber &&
+      concurrentLevelNumbers.has(classification.levelNumber)
+    ) {
+      return true;
+    }
+
+    // 3. Check papers currently seated in this venue from concurrent allocations
+    const concurrentPapersInVenue = concurrentPapers.filter((cp) =>
+      concurrentAllocations.some((a) => a.venueId === venueId && a.paperId === cp.id)
+    );
+
+    if (concurrentPapersInVenue.length > 0) {
+      // Check if any concurrent paper in this room belongs to a different academic level
+      const hasDifferentLevelInRoom = concurrentPapersInVenue.some((cp) => {
+        const cpLevelNum = extractLevelNumber(cp.level) ?? extractLevelNumber(cp.title);
+        return targetLevelNumber !== undefined && cpLevelNum !== undefined && cpLevelNum !== targetLevelNumber;
+      });
+
+      // Regular classrooms must NEVER mix different academic levels
+      if (hasDifferentLevelInRoom && !isCommunalHall(venueObj)) {
+        return true;
+      }
+
+      // Check allowCombine restrictions:
+      const targetCanCombine = targetPaper.allowCombine === true && !isListeningComp && targetPaper.type !== 'ORAL';
+      const allConcurrentCanCombine = concurrentPapersInVenue.every((cp) => cp.allowCombine === true);
+
+      if (!isCommunalHall(venueObj)) {
+        // Classrooms: if either paper forbids combine, or if different levels: block!
+        if (!targetCanCombine || !allConcurrentCanCombine || hasDifferentLevelInRoom) {
+          return true;
+        }
+      } else {
+        // Communal Hall: allow multi-level if communal hall, but block if any paper explicitly forbids combine or is audio/oral
+        if (targetPaper.allowCombine === false || concurrentPapersInVenue.some((cp) => cp.allowCombine === false)) {
+          return true;
+        }
+      }
+    }
+
     if (!isInternal) {
       const canTargetCombine = targetPaper.allowCombine === true && !isListeningComp && targetPaper.type !== 'ORAL';
       if (!canTargetCombine && venuesUsedByConcurrent.has(venueId)) {
@@ -408,6 +547,7 @@ export function runDeterministicAllocation(
       }
       return blockedVenuesFromNonCombine.has(venueId);
     }
+
     return false;
   };
 

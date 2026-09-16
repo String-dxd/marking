@@ -6,7 +6,8 @@ import {
   classifyVenue, 
   extractLevelNumber,
   getPaperLevel,
-  getDistinctLevels
+  getDistinctLevels,
+  isCandidateEligibleForPaper
 } from '../services/allocationEngine';
 import { getCandidatePaperArrangement } from '../types';
 import { 
@@ -114,7 +115,7 @@ export const AllocationViewer: React.FC = () => {
   // Enrolled candidates for current paper
   const enrolledCandidates = useMemo(() => {
     if (!currentPaper) return [];
-    return candidates.filter((c) => c.subjectCodes.includes(currentPaper.code));
+    return candidates.filter((c) => isCandidateEligibleForPaper(c, currentPaper));
   }, [candidates, currentPaper]);
 
   // Detected target academic level number for active paper
@@ -213,7 +214,7 @@ export const AllocationViewer: React.FC = () => {
 
     // Filter to papers with enrolled candidates if candidates exist
     const papersWithCandidates = papers.filter((p) =>
-      candidates.some((c) => c.subjectCodes.includes(p.code))
+      candidates.some((c) => isCandidateEligibleForPaper(c, p))
     );
     const targetPapers = papersWithCandidates.length > 0 ? papersWithCandidates : papers;
 
@@ -232,7 +233,7 @@ export const AllocationViewer: React.FC = () => {
     let totalSeated = 0;
 
     for (const paper of sorted) {
-      const enrolled = candidates.filter((c) => c.subjectCodes.includes(paper.code));
+      const enrolled = candidates.filter((c) => isCandidateEligibleForPaper(c, paper));
       const result = runDeterministicAllocation(
         paper,
         candidates,

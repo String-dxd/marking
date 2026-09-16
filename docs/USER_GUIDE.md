@@ -214,6 +214,17 @@ Switch to **Stage 5: Print & Audit** to access 4 purpose-built audit and operati
 * Features verification checkboxes for **Absent [ ]**, **Script Collected [ ]**, and candidate signature lines.
 * Includes script tally summary footer with Chief Invigilator sign-off.
 
+#### 5.5 Report 5: Candidate Entry Proof & Timetable Slips
+* Official individual student entry proof cards displaying registered paper schedule, exam venues, assigned seats, and access arrangements.
+* Supports **1 Student Per A4** and **2 Students Per A4 (Paper Saver)** layouts with scissors cutting guides.
+
+#### 5.6 Report 6: Exam Packing Cover Page (2-Page per Venue)
+* Designed specifically for subject departments packing question paper and script envelopes.
+* Automatically separates data by examination venue:
+  * **Page 1: Paper & Candidature Details:** Complete paper particulars, reporting/dismissal timings, candidate count, class distribution, access arrangement summary, seated candidate roster, and official SEAB packing checklist & script return reconciliation sign-offs.
+  * **Page 2: Official Seating Plan:** Examination title header, Teacher's Bench indicator, and complete 2D seating plan floor layout showing desk labels, student index numbers, classes, names, and AA flags.
+* Built-in Excel export generating a complete packing summary and venue candidate roster workbook.
+
 ---
 
 ## 4. Operational Checklist & Best Practices
