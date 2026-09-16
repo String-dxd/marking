@@ -64,7 +64,7 @@ export interface ExamPaper {
   durationMins: number;
   type: PaperType;
   requiresComputer: boolean;  // true for Computing, e-examinations, or digital lab papers
-  allowCombine?: boolean;     // whether paper can share a venue with other papers on same day/slot (always false for LISTENING_COMP)
+  allowCombine?: boolean;     // whether paper can share a venue with other papers on same day/slot (default false, always false for LISTENING_COMP)
   date: string;               // YYYY-MM-DD
   startTime: string;          // HH:mm
 }

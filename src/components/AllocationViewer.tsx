@@ -1,6 +1,13 @@
 import React, { useState, useMemo } from 'react';
 import { useExamStore } from '../store/useExamStore';
-import { runDeterministicAllocation, arePapersConcurrent } from '../services/allocationEngine';
+import { 
+  runDeterministicAllocation, 
+  arePapersConcurrent, 
+  classifyVenue, 
+  extractLevelNumber,
+  getPaperLevel,
+  getDistinctLevels
+} from '../services/allocationEngine';
 import { getCandidatePaperArrangement } from '../types';
 import { 
   Play, 
@@ -17,15 +24,20 @@ import {
   ExternalLink,
   X,
   DoorOpen,
-  Check
+  Check,
+  Layers,
+  GraduationCap
 } from 'lucide-react';
 
 export const AllocationViewer: React.FC = () => {
   const { 
+    scope,
     papers, 
     candidates, 
     venues, 
     allocations, 
+    autoCombineAaVenues,
+    setAutoCombineAaVenues,
     setAllocations, 
     setBatchAllocations,
     clearAllocationsForPaper, 
@@ -34,6 +46,7 @@ export const AllocationViewer: React.FC = () => {
     moveSeat 
   } = useExamStore();
 
+  const [selectedLevelFilter, setSelectedLevelFilter] = useState<string>('ALL');
   const [selectedPaperId, setSelectedPaperId] = useState<string>(papers[0]?.id || '');
   const [selectedVenueId, setSelectedVenueId] = useState<string>('');
   const [selectedSeatForSwap, setSelectedSeatForSwap] = useState<{ candidateId: string; seatLabel: string; venueId: string } | null>(null);
@@ -49,6 +62,7 @@ export const AllocationViewer: React.FC = () => {
       paperId: string;
       paperCode: string;
       paperTitle: string;
+      level?: string;
       date: string;
       startTime: string;
       enrolledCount: number;
@@ -59,10 +73,25 @@ export const AllocationViewer: React.FC = () => {
     }[];
   } | null>(null);
 
+  // Discover all distinct academic levels from papers and candidates
+  const distinctLevels = useMemo(() => {
+    return getDistinctLevels(papers, candidates);
+  }, [papers, candidates]);
+
+  // Filter papers by selected academic level
+  const displayedPapers = useMemo(() => {
+    if (selectedLevelFilter === 'ALL') return papers;
+    return papers.filter((p) => getPaperLevel(p, candidates) === selectedLevelFilter);
+  }, [papers, candidates, selectedLevelFilter]);
+
   // Current active paper
   const currentPaper = useMemo(() => {
-    return papers.find((p) => p.id === selectedPaperId) || papers[0] || null;
-  }, [papers, selectedPaperId]);
+    const foundInDisplayed = displayedPapers.find((p) => p.id === selectedPaperId);
+    if (foundInDisplayed) return foundInDisplayed;
+    const foundInAll = papers.find((p) => p.id === selectedPaperId);
+    if (foundInAll && selectedLevelFilter === 'ALL') return foundInAll;
+    return displayedPapers[0] || papers[0] || null;
+  }, [papers, displayedPapers, selectedPaperId, selectedLevelFilter]);
 
   // Current allocations for selected paper
   const currentAllocations = useMemo(() => {
@@ -87,6 +116,15 @@ export const AllocationViewer: React.FC = () => {
     if (!currentPaper) return [];
     return candidates.filter((c) => c.subjectCodes.includes(currentPaper.code));
   }, [candidates, currentPaper]);
+
+  // Detected target academic level number for active paper
+  const currentLevelNumber = useMemo(() => {
+    if (!currentPaper) return undefined;
+    const paperLevel = extractLevelNumber(currentPaper.level);
+    if (paperLevel !== undefined) return paperLevel;
+    const cand = enrolledCandidates.find((c) => extractLevelNumber(c.academicLevel) || extractLevelNumber(c.classGroup));
+    return cand ? extractLevelNumber(cand.academicLevel) || extractLevelNumber(cand.classGroup) : undefined;
+  }, [currentPaper, enrolledCandidates]);
 
   // Venues used in this allocation (and concurrent allocations for this slot)
   const allocatedVenueIds = useMemo(() => {
@@ -146,7 +184,8 @@ export const AllocationViewer: React.FC = () => {
       candidates,
       venues,
       papers,
-      allocations
+      allocations,
+      { autoCombineAaVenues }
     );
 
     setAllocations(currentPaper.id, result.allocations);
@@ -199,7 +238,8 @@ export const AllocationViewer: React.FC = () => {
         candidates,
         venues,
         papers,
-        newAllocations // accumulates to enforce short-gap venue continuity and concurrent non-overlap!
+        newAllocations, // accumulates to enforce short-gap venue continuity and concurrent non-overlap!
+        { autoCombineAaVenues }
       );
 
       newAllocations[paper.id] = result.allocations;
@@ -210,6 +250,7 @@ export const AllocationViewer: React.FC = () => {
         paperId: paper.id,
         paperCode: paper.code,
         paperTitle: paper.title,
+        level: getPaperLevel(paper, candidates),
         date: paper.date,
         startTime: paper.startTime,
         enrolledCount: enrolled.length,
@@ -402,6 +443,32 @@ export const AllocationViewer: React.FC = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
+            {/* Master Toggle: Auto-Combine AA Venues */}
+            <label
+              className="inline-flex items-center gap-2 px-3 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-300 rounded-lg cursor-pointer transition-colors shadow-xs select-none"
+              title="When enabled, AA separate room candidates across concurrent papers are automatically combined into designated AA rooms without desk collisions."
+            >
+              <input
+                type="checkbox"
+                checked={autoCombineAaVenues}
+                onChange={(e) => setAutoCombineAaVenues(e.target.checked)}
+                className="w-4 h-4 rounded text-indigo-600 border-slate-300 focus:ring-indigo-500 cursor-pointer"
+              />
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700">
+                <Users className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Auto-Combine AA Venues</span>
+              </div>
+              <span
+                className={`text-[10px] font-bold px-1.5 py-0.5 rounded tracking-wider uppercase ${
+                  autoCombineAaVenues
+                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                    : 'bg-slate-200 text-slate-600 border border-slate-300'
+                }`}
+              >
+                {autoCombineAaVenues ? 'ON' : 'OFF'}
+              </span>
+            </label>
+
             {/* Paper Selector */}
             <select
               value={currentPaper?.id || ''}
@@ -410,13 +477,37 @@ export const AllocationViewer: React.FC = () => {
                 setSelectedSeatForSwap(null);
                 setLastWarnings([]);
               }}
-              className="px-3.5 py-2 bg-white border border-slate-300 rounded-lg text-sm font-medium text-slate-700 shadow-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+              className="px-3.5 py-2 bg-white border border-slate-300 rounded-lg text-sm font-medium text-slate-700 shadow-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none max-w-xs md:max-w-sm truncate cursor-pointer"
             >
-              {papers.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.code} — {p.title}
-                </option>
-              ))}
+              {selectedLevelFilter === 'ALL' ? (
+                distinctLevels.length > 1 ? (
+                  distinctLevels.map((lvl) => {
+                    const lvlPapers = papers.filter((p) => getPaperLevel(p, candidates) === lvl);
+                    if (lvlPapers.length === 0) return null;
+                    return (
+                      <optgroup key={lvl} label={`── ${lvl} ──`}>
+                        {lvlPapers.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            [{lvl}] {p.code} — {p.title}
+                          </option>
+                        ))}
+                      </optgroup>
+                    );
+                  })
+                ) : (
+                  papers.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.code} — {p.title}
+                    </option>
+                  ))
+                )
+              ) : (
+                displayedPapers.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.code} — {p.title}
+                  </option>
+                ))
+              )}
             </select>
 
             <button
@@ -432,7 +523,7 @@ export const AllocationViewer: React.FC = () => {
               onClick={handleBatchRunAll}
               disabled={papers.length === 0}
               className="inline-flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg shadow-sm transition-colors cursor-pointer"
-              title="Batch allocate seating for all scheduled exam papers"
+              title="Batch allocate seating for all scheduled exam papers across all levels"
             >
               <Sparkles className="w-4 h-4" />
               <span>Batch Run All</span>
@@ -466,10 +557,75 @@ export const AllocationViewer: React.FC = () => {
           </div>
         </div>
 
+        {/* Level Switcher Bar */}
+        {distinctLevels.length > 0 && (
+          <div className="mt-4 pt-3.5 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-slate-700">
+              <GraduationCap className="w-4 h-4 text-indigo-600" />
+              <span className="text-xs font-bold uppercase tracking-wider">Level Filter:</span>
+            </div>
+
+            <div className="flex flex-wrap items-center p-1 bg-slate-100 rounded-lg border border-slate-200 gap-1">
+              <button
+                type="button"
+                onClick={() => setSelectedLevelFilter('ALL')}
+                className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                  selectedLevelFilter === 'ALL'
+                    ? 'bg-white text-indigo-700 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>All Levels ({papers.length})</span>
+              </button>
+
+              {distinctLevels.map((lvl) => {
+                const count = papers.filter((p) => getPaperLevel(p, candidates) === lvl).length;
+                const isSelected = selectedLevelFilter === lvl;
+                return (
+                  <button
+                    key={lvl}
+                    type="button"
+                    onClick={() => {
+                      setSelectedLevelFilter(lvl);
+                      const firstOfLvl = papers.find((p) => getPaperLevel(p, candidates) === lvl);
+                      if (firstOfLvl) {
+                        setSelectedPaperId(firstOfLvl.id);
+                        setSelectedSeatForSwap(null);
+                        setLastWarnings([]);
+                      }
+                    }}
+                    className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                      isSelected
+                        ? 'bg-indigo-600 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <span>{lvl}</span>
+                    <span
+                      className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                        isSelected ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-600'
+                      }`}
+                    >
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Selected Paper Details strip */}
         {currentPaper && (
           <div className="mt-4 pt-4 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-600">
             <div className="flex flex-wrap items-center gap-4">
+              <div>
+                <span className="text-slate-400">Level:</span>{' '}
+                <strong className="text-indigo-700 font-bold bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                  {getPaperLevel(currentPaper, candidates)}
+                </strong>
+              </div>
               <div>
                 <span className="text-slate-400">Date:</span>{' '}
                 <strong>{currentPaper.date}</strong> at <strong>{currentPaper.startTime}</strong> ({currentPaper.durationMins}m)
@@ -619,6 +775,7 @@ export const AllocationViewer: React.FC = () => {
               const isActive = activeVenue?.id === v.id;
               const isEmpty = countInVenue === 0 && concurrentInVenue === 0;
               const isSourceOfSwap = selectedSeatForSwap?.venueId === v.id;
+              const venueClass = classifyVenue(v.name, currentLevelNumber);
 
               return (
                 <button
@@ -638,6 +795,28 @@ export const AllocationViewer: React.FC = () => {
                     <Building2 className="w-3.5 h-3.5" />
                   )}
                   <span>{v.name}</span>
+
+                  {scope === 'internal' && (
+                    <span
+                      className={`text-[9px] px-1.5 py-0.2 rounded font-bold uppercase tracking-tight ${
+                        isActive
+                          ? venueClass.tier === 1
+                            ? 'bg-emerald-500/30 text-emerald-200'
+                            : venueClass.tier === 2
+                            ? 'bg-sky-500/30 text-sky-200'
+                            : 'bg-amber-500/30 text-amber-200'
+                          : venueClass.tier === 1
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : venueClass.tier === 2
+                          ? 'bg-sky-100 text-sky-800'
+                          : 'bg-amber-100 text-amber-800'
+                      }`}
+                      title={venueClass.tierLabel}
+                    >
+                      {venueClass.tier === 1 ? 'Own Level' : venueClass.tier === 2 ? 'Non-Form' : 'Other Level'}
+                    </span>
+                  )}
+
                   <span
                     className={`px-1.5 py-0.5 rounded text-[10px] ${
                       isActive
@@ -785,8 +964,13 @@ export const AllocationViewer: React.FC = () => {
                         {candidate ? (
                           <div className="space-y-1">
                             <div className="flex items-center gap-1.5">
+                              {candidate.classGroup && (
+                                <span className="text-[10px] font-bold text-slate-700 bg-slate-200/80 px-1.5 py-0.5 rounded">
+                                  {candidate.classGroup}
+                                </span>
+                              )}
                               <span className="font-mono font-black text-sm text-slate-900 bg-slate-100 px-1.5 py-0.5 rounded">
-                                {candidate.indexNumber}
+                                {candidate.classGroup ? `#${candidate.indexNumber}` : candidate.indexNumber}
                               </span>
                               {allocation?.shiftIndex && allocation.shiftIndex > 1 && (
                                 <span className="text-[10px] font-bold text-purple-700 bg-purple-100 px-1 rounded">
@@ -909,6 +1093,7 @@ interface BatchSummaryModalProps {
       paperId: string;
       paperCode: string;
       paperTitle: string;
+      level?: string;
       date: string;
       startTime: string;
       enrolledCount: number;
@@ -927,6 +1112,26 @@ const BatchSummaryModal: React.FC<BatchSummaryModalProps> = ({
   onClose,
   onSelectPaper,
 }) => {
+  const [modalLevelFilter, setModalLevelFilter] = useState<string>('ALL');
+
+  const summaryLevels = useMemo(() => {
+    const set = new Set<string>();
+    summary.paperStats.forEach((p) => {
+      if (p.level && p.level !== 'General') set.add(p.level);
+    });
+    return Array.from(set).sort((a, b) => {
+      const numA = extractLevelNumber(a) ?? 999;
+      const numB = extractLevelNumber(b) ?? 999;
+      if (numA !== numB) return numA - numB;
+      return a.localeCompare(b);
+    });
+  }, [summary.paperStats]);
+
+  const filteredStats = useMemo(() => {
+    if (modalLevelFilter === 'ALL') return summary.paperStats;
+    return summary.paperStats.filter((p) => p.level === modalLevelFilter);
+  }, [summary.paperStats, modalLevelFilter]);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
       <div className="bg-white rounded-xl max-w-3xl w-full shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
@@ -939,7 +1144,7 @@ const BatchSummaryModal: React.FC<BatchSummaryModalProps> = ({
             <div>
               <h3 className="font-bold text-lg">Batch Seating Allocation Complete</h3>
               <p className="text-xs text-purple-100">
-                All scheduled examination papers processed through the deterministic seating solver.
+                All scheduled examination papers processed across all levels through the deterministic seating solver.
               </p>
             </div>
           </div>
@@ -963,7 +1168,7 @@ const BatchSummaryModal: React.FC<BatchSummaryModalProps> = ({
           <div className="bg-white p-3.5 rounded-lg border border-slate-200 shadow-xs">
             <span className="text-xs font-semibold text-slate-500 uppercase">Rooming Checks</span>
             <p className="text-2xl font-bold text-emerald-600 mt-1">Passed</p>
-            <p className="text-[11px] text-slate-400">AA & continuity enforced</p>
+            <p className="text-[11px] text-slate-400">Hierarchy & continuity verified</p>
           </div>
         </div>
 
@@ -986,17 +1191,58 @@ const BatchSummaryModal: React.FC<BatchSummaryModalProps> = ({
           )}
 
           <div>
-            <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
-              Allocated Papers Breakdown
-            </h4>
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+              <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                Allocated Papers Breakdown ({filteredStats.length})
+              </h4>
+
+              {summaryLevels.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1 p-0.5 bg-slate-100 rounded-lg border border-slate-200 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setModalLevelFilter('ALL')}
+                    className={`px-2.5 py-1 rounded text-xs font-semibold transition-all cursor-pointer ${
+                      modalLevelFilter === 'ALL'
+                        ? 'bg-white text-indigo-700 shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    All ({summary.paperStats.length})
+                  </button>
+                  {summaryLevels.map((lvl) => {
+                    const count = summary.paperStats.filter((p) => p.level === lvl).length;
+                    return (
+                      <button
+                        key={lvl}
+                        type="button"
+                        onClick={() => setModalLevelFilter(lvl)}
+                        className={`px-2.5 py-1 rounded text-xs font-semibold transition-all cursor-pointer ${
+                          modalLevelFilter === lvl
+                            ? 'bg-indigo-600 text-white shadow-xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        {lvl} ({count})
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
             <div className="border border-slate-200 rounded-lg overflow-hidden divide-y divide-slate-100">
-              {summary.paperStats.map((stat) => (
+              {filteredStats.map((stat) => (
                 <div key={stat.paperId} className="p-3.5 flex items-center justify-between hover:bg-slate-50 transition-colors">
                   <div className="space-y-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="px-2 py-0.5 bg-slate-100 border border-slate-200 text-slate-800 font-mono font-bold text-xs rounded">
                         {stat.paperCode}
                       </span>
+                      {stat.level && (
+                        <span className="px-2 py-0.2 bg-indigo-50 text-indigo-700 font-bold text-[10px] rounded border border-indigo-200">
+                          {stat.level}
+                        </span>
+                      )}
                       <span className="font-semibold text-slate-800 text-sm">{stat.paperTitle}</span>
                       {stat.requiresComputer && (
                         <span className="inline-flex items-center gap-1 text-[10px] bg-sky-100 text-sky-800 font-semibold px-1.5 py-0.2 rounded border border-sky-200">

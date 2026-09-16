@@ -55,7 +55,7 @@ function parseSeabFormat(rows: Record<string, any>[]): ParseResult {
 
     const rawIndex = getVal(['index no.', 'index no', 'index number']);
     const statutoryName = getVal(['statutory name', 'candidate name', 'student name', 'name']);
-    const academicLevel = getVal(['academic level', 'level']);
+    const academicLevel = getVal(['academic level', 'level', 'acad level', 'grade', 'year']);
     const schoolName = getVal(['school name', 'posted school name']);
     const examCentreCode = getVal(['posted exam centre code', 'exam centre code', 'centre code']);
     const subjectCode = getVal(['subject code']);
@@ -84,9 +84,9 @@ function parseSeabFormat(rows: Record<string, any>[]): ParseResult {
 
     // Determine Paper Archetype
     let paperType: PaperType = 'STANDARD';
-    if (mode.includes('PRACTICAL') || mode.includes('LAB')) {
+    if (/\b(?:PRACTICAL|SCIENCE PRACTICAL)\b/i.test(mode) || /\b(?:PRACTICAL|SCIENCE PRACTICAL)\b/i.test(subjectName)) {
       paperType = 'SCIENCE_LAB';
-    } else if (mode.includes('LISTENING') || mode.includes('LC')) {
+    } else if (/\b(?:LISTENING|LC)\b/i.test(mode) || /\b(?:LISTENING|LC)\b/i.test(subjectName)) {
       paperType = 'LISTENING_COMP';
     }
 
@@ -104,7 +104,8 @@ function parseSeabFormat(rows: Record<string, any>[]): ParseResult {
         durationMins: paperType === 'LISTENING_COMP' ? 45 : paperType === 'SCIENCE_LAB' ? 110 : 120,
         type: paperType,
         requiresComputer,
-        allowCombine: paperType !== 'LISTENING_COMP',
+        allowCombine: false,
+        level: academicLevel || undefined,
         date: new Date().toISOString().split('T')[0],
         startTime: '08:00'
       });
@@ -116,13 +117,16 @@ function parseSeabFormat(rows: Record<string, any>[]): ParseResult {
         id: cleanIndexNumber,
         indexNumber: cleanIndexNumber,
         fullName: statutoryName || `Candidate ${cleanIndexNumber}`,
-        academicLevel,
+        academicLevel: academicLevel || undefined,
         schoolName,
         examCentreCode,
         subjectCodes: [compositePaperCode]
       });
     } else {
       const existing = candidatesMap.get(cleanIndexNumber)!;
+      if (!existing.academicLevel && academicLevel) {
+        existing.academicLevel = academicLevel;
+      }
       if (!existing.subjectCodes.includes(compositePaperCode)) {
         existing.subjectCodes.push(compositePaperCode);
       }
@@ -161,6 +165,7 @@ function parseGenericFormat(rows: Record<string, any>[]): ParseResult {
     const rawIndex = getVal(['index', 'id', 'student id', 'roll no']) || String(i + 1).padStart(4, '0');
     const name = getVal(['name', 'full name', 'student name']) || `Candidate ${rawIndex}`;
     const classGroup = getVal(['class', 'class group', 'form class']);
+    const academicLevel = getVal(['academic level', 'level', 'acad level', 'grade', 'year', 'level / class', 'academic year']);
     const papersRaw = getVal(['papers', 'registered papers', 'subjects', 'subject codes']);
 
     const digitsOnly = rawIndex.replace(/\D/g, '');
@@ -181,7 +186,8 @@ function parseGenericFormat(rows: Record<string, any>[]): ParseResult {
           durationMins: 120,
           type: 'STANDARD',
           requiresComputer: false,
-          allowCombine: true,
+          allowCombine: false,
+          level: academicLevel || undefined,
           date: new Date().toISOString().split('T')[0],
           startTime: '08:00'
         });
@@ -193,6 +199,7 @@ function parseGenericFormat(rows: Record<string, any>[]): ParseResult {
       indexNumber: cleanIndexNumber,
       fullName: name,
       classGroup,
+      academicLevel: academicLevel || undefined,
       subjectCodes
     });
   }
@@ -342,11 +349,30 @@ export async function parsePdfTimetable(file: File): Promise<{ papers: ExamPaper
   const doc = await pdfjsLib.getDocument({ data }).promise;
   const papersMap = new Map<string, ExamPaper>();
   let rowCount = 0;
+  let detectedLevel = '';
 
   for (let p = 1; p <= doc.numPages; p++) {
     const page = await doc.getPage(p);
     const content = await page.getTextContent();
     const rows: { y: number; items: { x: number; str: string }[] }[] = [];
+
+    const pageText = content.items.map((i: any) => i.str || '').join(' ').toUpperCase();
+    if (!detectedLevel) {
+      if (pageText.includes('ORDINARY LEVEL') || pageText.includes('O-LEVEL') || pageText.includes('O LEVEL')) {
+        detectedLevel = 'GCE O-Level';
+      } else if (pageText.includes('NORMAL (ACADEMIC)') || pageText.includes('N(A)-LEVEL') || pageText.includes('N(A) LEVEL')) {
+        detectedLevel = 'GCE N(A)-Level';
+      } else if (pageText.includes('NORMAL (TECHNICAL)') || pageText.includes('N(T)-LEVEL') || pageText.includes('N(T) LEVEL')) {
+        detectedLevel = 'GCE N(T)-Level';
+      } else if (pageText.includes('ADVANCED LEVEL') || pageText.includes('A-LEVEL') || pageText.includes('A LEVEL')) {
+        detectedLevel = 'GCE A-Level';
+      } else if (pageText.includes('PRIMARY SCHOOL LEAVING') || pageText.includes('PSLE')) {
+        detectedLevel = 'PSLE';
+      } else {
+        const lvlMatch = pageText.match(/\b(SECONDARY\s*[1-6]|SEC\s*[1-6]|PRIMARY\s*[1-6]|PRI\s*[1-6]|JC\s*[1-2])\b/);
+        if (lvlMatch) detectedLevel = lvlMatch[1];
+      }
+    }
 
     for (const rawItem of content.items) {
       const it = rawItem as { str: string; transform: number[] };
@@ -455,7 +481,7 @@ export async function parsePdfTimetable(file: File): Promise<{ papers: ExamPaper
         cleanMoa.includes('COMPUTER') ||
         cleanMoa.includes('E-EXAM');
 
-      const allowCombine = paperType !== 'LISTENING_COMP' && paperType !== 'ORAL';
+      const allowCombine = false;
       const compositeCode = `${code}/${paperNo}`;
 
       // Build a unique paper key per subject+paper+type so ORAL and LC/WRITTEN
@@ -466,19 +492,81 @@ export async function parsePdfTimetable(file: File): Promise<{ papers: ExamPaper
           ? `${compositeCode}-ORAL`
           : compositeCode;
 
-      if (!papersMap.has(paperKey)) {
-        papersMap.set(paperKey, {
-          id: `paper-${paperKey.replace(/[^A-Za-z0-9]/g, '-')}`,
-          code: compositeCode,
-          title: subjName || `Paper ${compositeCode}`,
-          date: isoDate,
-          startTime,
-          durationMins,
-          type: paperType,
-          requiresComputer,
-          allowCombine,
-        });
-        rowCount++;
+      const isMtl =
+        code.toUpperCase().includes('MTL') ||
+        cleanTitle.includes('MOTHER TONGUE') ||
+        cleanTitle.includes('MTL');
+
+      if (isMtl) {
+        const clCode = compositeCode.replace(/MTL/i, 'CL').replace(/Mother\s*Tongue/i, 'CL');
+        const clTitle = subjName
+          ? subjName.replace(/Mother\s*Tongue/i, 'Chinese Language').replace(/\bMTL\b/i, 'Chinese Language')
+          : `Chinese Language Paper ${clCode}`;
+
+        const mlCode = compositeCode.replace(/MTL/i, 'ML').replace(/Mother\s*Tongue/i, 'ML');
+        const mlTitle = subjName
+          ? subjName.replace(/Mother\s*Tongue/i, 'Malay Language').replace(/\bMTL\b/i, 'Malay Language')
+          : `Malay Language Paper ${mlCode}`;
+
+        const clKey = cleanTitle.includes('SHIFT')
+          ? `${clCode}-${cleanTitle.slice(0, 7).replace(/[^A-Za-z0-9]/g, '')}`
+          : paperType === 'ORAL'
+            ? `${clCode}-ORAL`
+            : clCode;
+
+        const mlKey = cleanTitle.includes('SHIFT')
+          ? `${mlCode}-${cleanTitle.slice(0, 7).replace(/[^A-Za-z0-9]/g, '')}`
+          : paperType === 'ORAL'
+            ? `${mlCode}-ORAL`
+            : mlCode;
+
+        if (!papersMap.has(clKey)) {
+          papersMap.set(clKey, {
+            id: `paper-${clKey.replace(/[^A-Za-z0-9]/g, '-')}`,
+            code: clCode,
+            title: clTitle,
+            date: isoDate,
+            startTime,
+            durationMins,
+            type: paperType,
+            requiresComputer,
+            allowCombine,
+            level: detectedLevel || undefined,
+          });
+          rowCount++;
+        }
+
+        if (!papersMap.has(mlKey)) {
+          papersMap.set(mlKey, {
+            id: `paper-${mlKey.replace(/[^A-Za-z0-9]/g, '-')}`,
+            code: mlCode,
+            title: mlTitle,
+            date: isoDate,
+            startTime,
+            durationMins,
+            type: paperType,
+            requiresComputer,
+            allowCombine,
+            level: detectedLevel || undefined,
+          });
+          rowCount++;
+        }
+      } else {
+        if (!papersMap.has(paperKey)) {
+          papersMap.set(paperKey, {
+            id: `paper-${paperKey.replace(/[^A-Za-z0-9]/g, '-')}`,
+            code: compositeCode,
+            title: subjName || `Paper ${compositeCode}`,
+            date: isoDate,
+            startTime,
+            durationMins,
+            type: paperType,
+            requiresComputer,
+            allowCombine,
+            level: detectedLevel || undefined,
+          });
+          rowCount++;
+        }
       }
     }
   }
@@ -520,6 +608,7 @@ export async function parseSpreadsheetTimetable(file: File): Promise<{ papers: E
     const rawDate = getVal(['date', 'exam date', 'day']);
     const rawTime = getVal(['start time', 'time', 'start', 'session time']);
     const rawDuration = getVal(['duration', 'duration (mins)', 'duration (minutes)', 'duration mins']);
+    const rawLevel = getVal(['academic level', 'level', 'acad level', 'grade', 'level / class', 'stream / level', 'year']);
     const mode = getVal(['mode', 'mode of assessment', 'moa', 'type', 'paper type']).toUpperCase();
     const compRaw = getVal(['requires computer', 'computer', 'pc', 'e-exam']).toLowerCase();
     const combineRaw = getVal(['allow combine', 'can combine', 'combine']).toLowerCase();
@@ -540,9 +629,9 @@ export async function parseSpreadsheetTimetable(file: File): Promise<{ papers: E
     }
 
     let paperType: PaperType = 'STANDARD';
-    if (mode.includes('PRACTICAL') || mode.includes('LAB') || title.toUpperCase().includes('PRACTICAL') || title.toUpperCase().includes('SHIFT')) {
+    if (/\b(?:PRACTICAL|SCIENCE PRACTICAL)\b/i.test(mode) || /\b(?:PRACTICAL|SCIENCE PRACTICAL)\b/i.test(title)) {
       paperType = 'SCIENCE_LAB';
-    } else if (mode.includes('LISTENING') || mode.includes('LC') || title.toUpperCase().includes('LISTENING')) {
+    } else if (/\b(?:LISTENING|LC)\b/i.test(mode) || /\b(?:LISTENING|LC)\b/i.test(title)) {
       paperType = 'LISTENING_COMP';
     }
 
@@ -552,28 +641,83 @@ export async function parseSpreadsheetTimetable(file: File): Promise<{ papers: E
 
     const allowCombine = paperType === 'LISTENING_COMP' 
       ? false 
-      : (combineRaw === 'no' || combineRaw === 'false' || combineRaw === '0' ? false : true);
+      : (combineRaw === 'yes' || combineRaw === 'true' || combineRaw === '1');
 
     const formattedDate = normalizeSingaporeDate(rawDate);
     const formattedTime = normalizeStartTime(rawTime);
     const duration = normalizeDurationMins(rawDuration, paperType);
 
-    const paperKey = title.toUpperCase().includes('SHIFT')
-      ? `${compositeCode}-${title.toUpperCase().slice(0, 7).replace(/[^A-Za-z0-9]/g, '')}`
-      : compositeCode;
+    const isMtl =
+      compositeCode.toUpperCase().includes('MTL') ||
+      title.toUpperCase().includes('MOTHER TONGUE') ||
+      rawCode.toUpperCase().includes('MTL');
 
-    if (!papersMap.has(paperKey)) {
-      papersMap.set(paperKey, {
-        id: `paper-${paperKey.replace(/[^A-Za-z0-9]/g, '-')}`,
-        code: compositeCode,
-        title: title || `Paper ${compositeCode}`,
-        date: formattedDate,
-        startTime: formattedTime,
-        durationMins: duration,
-        type: paperType,
-        requiresComputer,
-        allowCombine,
-      });
+    if (isMtl) {
+      const clCode = compositeCode.replace(/MTL/i, 'CL').replace(/Mother\s*Tongue/i, 'CL');
+      const clTitle = title
+        ? title.replace(/Mother\s*Tongue/i, 'Chinese Language').replace(/\bMTL\b/i, 'Chinese Language')
+        : `Chinese Language Paper ${clCode}`;
+
+      const mlCode = compositeCode.replace(/MTL/i, 'ML').replace(/Mother\s*Tongue/i, 'ML');
+      const mlTitle = title
+        ? title.replace(/Mother\s*Tongue/i, 'Malay Language').replace(/\bMTL\b/i, 'Malay Language')
+        : `Malay Language Paper ${mlCode}`;
+
+      const clKey = title.toUpperCase().includes('SHIFT')
+        ? `${clCode}-${title.toUpperCase().slice(0, 7).replace(/[^A-Za-z0-9]/g, '')}`
+        : clCode;
+      const mlKey = title.toUpperCase().includes('SHIFT')
+        ? `${mlCode}-${title.toUpperCase().slice(0, 7).replace(/[^A-Za-z0-9]/g, '')}`
+        : mlCode;
+
+      if (!papersMap.has(clKey)) {
+        papersMap.set(clKey, {
+          id: `paper-${clKey.replace(/[^A-Za-z0-9]/g, '-')}`,
+          code: clCode,
+          title: clTitle,
+          date: formattedDate,
+          startTime: formattedTime,
+          durationMins: duration,
+          type: paperType,
+          requiresComputer,
+          allowCombine,
+          level: rawLevel || undefined,
+        });
+      }
+
+      if (!papersMap.has(mlKey)) {
+        papersMap.set(mlKey, {
+          id: `paper-${mlKey.replace(/[^A-Za-z0-9]/g, '-')}`,
+          code: mlCode,
+          title: mlTitle,
+          date: formattedDate,
+          startTime: formattedTime,
+          durationMins: duration,
+          type: paperType,
+          requiresComputer,
+          allowCombine,
+          level: rawLevel || undefined,
+        });
+      }
+    } else {
+      const paperKey = title.toUpperCase().includes('SHIFT')
+        ? `${compositeCode}-${title.toUpperCase().slice(0, 7).replace(/[^A-Za-z0-9]/g, '')}`
+        : compositeCode;
+
+      if (!papersMap.has(paperKey)) {
+        papersMap.set(paperKey, {
+          id: `paper-${paperKey.replace(/[^A-Za-z0-9]/g, '-')}`,
+          code: compositeCode,
+          title: title || `Paper ${compositeCode}`,
+          date: formattedDate,
+          startTime: formattedTime,
+          durationMins: duration,
+          type: paperType,
+          requiresComputer,
+          allowCombine,
+          level: rawLevel || undefined,
+        });
+      }
     }
   }
 
@@ -623,5 +767,8 @@ export async function parseMultipleTimetableFiles(files: File[]): Promise<MultiT
     fileReports,
   };
 }
+
+export * from './internalCandidateParser';
+export * from './internalTimetableParser';
 
 

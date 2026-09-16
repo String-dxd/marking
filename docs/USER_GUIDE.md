@@ -128,15 +128,30 @@ National timetable PDFs often list 200+ subjects nationwide. To keep your schedu
 
 ### Step 3: Stage 3 — Examination Venues Matrix
 
-#### 3.1 Defining School Exam Rooms
+#### 3.1 Batch Template Upload & Management
 * Switch to **Stage 3: Venues Matrix**.
-* Review default venues or click **"+ Add Venue"** to add School Halls, Classrooms, Science Labs, or AA Separate Rooms.
-* Set rows, columns, PC terminal counts, and audio capability flags.
+* **Download Sample Template:** Click **"Sample Template"** to download pre-configured `.csv` or `.xlsx` templates containing standard Singapore school exam rooms (School Hall, Classrooms, Computer Labs with PC station limits, Science Practical Labs, and AA Quiet Rooms with pre-configured disabled pillar/aisle desks).
+* **Batch Upload:** Click **"Upload Template (.xlsx / .csv)"** to import one or multiple venue spreadsheets simultaneously. Plexo automatically parses dimensions, computer limits, capabilities, and disabled desks.
+* **Export Venues:** Click **"Export"** to backup or roundtrip-edit configured rooms in CSV or Excel format.
+* **Manual Add & Clone:** Click **"+ Add Venue"** for manual room creation, or click the **Clone** icon on any venue card to duplicate standard classroom grids in one click.
 
-#### 3.2 Interactive Desk Grid Customization
+#### 3.2 Supported Template Columns
+| Column Name | Required | Description | Example Values |
+| :--- | :--- | :--- | :--- |
+| **`Venue Name`** | Yes | Name of the exam hall or room | `School Hall`, `Classroom 4-1`, `Physics Lab 1` |
+| **`Rows`** | Yes | Number of desk rows (front to back) | `12`, `6`, `8` |
+| **`Columns`** | Yes | Number of desk columns (left to right) | `10`, `5`, `4` |
+| **`Computer Lab`** | Optional | Indicates PC lab capability | `Yes`, `No` |
+| **`Computer Stations`** | Optional | Number of usable PC workstations | `30`, `40` |
+| **`Science Lab`** | Optional | Equipped for science practical shifts | `Yes`, `No` |
+| **`Audio / LC Equipped`** | Optional | Suitable for Listening Comprehension audio broadcast (default: Yes) | `Yes`, `No` |
+| **`AA Designated`** | Optional | Designated quiet room for Access Arrangements | `Yes`, `No` |
+| **`Disabled Desks`** | Optional | Comma-separated list of disabled desks, pillars, or aisles | `"R1C1, R1C10, R12C1, R12C10"`, `"R1C3..R6C3"` |
+
+#### 3.3 Interactive Desk Grid Customization
 Every examination room has physical obstacles (pillars, aisles, unusable desks, invigilator pathways).
 * Click any desk cell (`R1C1`, `R1C2`, etc.) to **toggle its active status**.
-* Deactivated desks turn grey with a `Ban` icon (`Aisle / Pillar`) and are skipped by the seating engine.
+* Deactivated desks turn grey with a `Ban` icon (`Aisle / Pillar`) and are automatically skipped by the seating allocation engine.
 
 ![Stage 3 Examination Venues Matrix & Interactive Grid](./images/06_venues_matrix.png)
 

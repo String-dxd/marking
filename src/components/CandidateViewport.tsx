@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useExamStore } from '../store/useExamStore';
-import { parseMultipleCandidateFiles } from '../services/candidateParser';
+import { parseMultipleCandidateFiles, parseMultipleInternalCandidateFiles } from '../services/candidateParser';
+import { extractLevelNumber, getCanonicalLevelName } from '../services/allocationEngine';
 import type { Candidate, AccessArrangement } from '../types';
 import { 
   Upload, 
@@ -14,24 +15,65 @@ import {
   Layers,
   FileText,
   RotateCcw,
-  Check
+  Check,
+  Trash2,
+  AlertTriangle,
+  GraduationCap
 } from 'lucide-react';
 
 export const CandidateViewport: React.FC = () => {
-  const { candidates, mergeCandidates, saveCandidateAAConfig } = useExamStore();
+  const { scope, candidates, mergeCandidates, deleteCandidate, clearCandidates, saveCandidateAAConfig } = useExamStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [editingCandidate, setEditingCandidate] = useState<Candidate | null>(null);
+  const [isPurgeModalOpen, setIsPurgeModalOpen] = useState(false);
+  const [candidateToDelete, setCandidateToDelete] = useState<Candidate | null>(null);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [levelFilter, setLevelFilter] = useState<string>('ALL');
 
-  // Filter candidates by name or index
+  // Discover all distinct academic levels from candidates
+  const distinctLevels = useMemo(() => {
+    const set = new Set<string>();
+    candidates.forEach((c) => {
+      if (c.academicLevel) {
+        const canonical = getCanonicalLevelName(c.academicLevel);
+        if (canonical) set.add(canonical);
+      } else if (c.classGroup) {
+        const num = extractLevelNumber(c.classGroup);
+        if (num !== undefined) set.add(`Secondary ${num}`);
+      }
+    });
+    return Array.from(set).sort((a, b) => {
+      const numA = extractLevelNumber(a) ?? 99;
+      const numB = extractLevelNumber(b) ?? 99;
+      return numA - numB;
+    });
+  }, [candidates]);
+
+  // Filter candidates by level, name, index, or class
   const filteredCandidates = useMemo(() => {
+    let list = candidates;
+    if (levelFilter !== 'ALL') {
+      list = list.filter((c) => {
+        if (c.academicLevel) {
+          return getCanonicalLevelName(c.academicLevel) === levelFilter;
+        }
+        if (c.classGroup) {
+          const num = extractLevelNumber(c.classGroup);
+          return num !== undefined && `Secondary ${num}` === levelFilter;
+        }
+        return false;
+      });
+    }
     const q = searchQuery.toLowerCase().trim();
-    if (!q) return candidates;
-    return candidates.filter(
-      (c) => c.fullName.toLowerCase().includes(q) || c.indexNumber.includes(q)
+    if (!q) return list;
+    return list.filter(
+      (c) =>
+        c.fullName.toLowerCase().includes(q) ||
+        c.indexNumber.includes(q) ||
+        (c.classGroup && c.classGroup.toLowerCase().includes(q))
     );
-  }, [candidates, searchQuery]);
+  }, [candidates, levelFilter, searchQuery]);
 
   // AA Metrics across default & paper-specific arrangements
   const stats = useMemo(() => {
@@ -75,16 +117,29 @@ export const CandidateViewport: React.FC = () => {
     setUploadMessage(null);
 
     try {
-      const result = await parseMultipleCandidateFiles(files);
-      mergeCandidates(result.mergedCandidates);
+      if (scope === 'internal') {
+        const result = await parseMultipleInternalCandidateFiles(files);
+        mergeCandidates(result.mergedCandidates);
 
-      const fileSummary = result.fileReports
-        .map((r) => `${r.fileName} (${r.candidateCount} candidates, ${r.format})`)
-        .join('; ');
+        const fileSummary = result.fileReports
+          .map((r) => `${r.fileName} (${r.candidateCount} students, ${r.subjectCount} subjects)`)
+          .join('; ');
 
-      setUploadMessage(
-        `Successfully processed ${files.length} file(s): ${fileSummary}. Candidates merged cleanly (NRIC/FIN discarded; 4-digit Index IDs retained).`
-      );
+        setUploadMessage(
+          `Successfully processed ${files.length} internal mark sheet file(s): ${fileSummary}. Total ${result.mergedCandidates.length} students loaded across ${result.discoveredSubjects.length} subjects.`
+        );
+      } else {
+        const result = await parseMultipleCandidateFiles(files);
+        mergeCandidates(result.mergedCandidates);
+
+        const fileSummary = result.fileReports
+          .map((r) => `${r.fileName} (${r.candidateCount} candidates, ${r.format})`)
+          .join('; ');
+
+        setUploadMessage(
+          `Successfully processed ${files.length} file(s): ${fileSummary}. Candidates merged cleanly (NRIC/FIN discarded; 4-digit Index IDs retained).`
+        );
+      }
     } catch (err: any) {
       setUploadMessage(`Upload error: ${err.message}`);
     } finally {
@@ -94,6 +149,30 @@ export const CandidateViewport: React.FC = () => {
   };
 
   const handleDownloadCandidateTemplate = () => {
+    if (scope === 'internal') {
+      const csvContent = [
+        '# MOE School Cockpit Component Mark Sheet (Report ID: RE_RES_090) Guidance',
+        '# Export directly from School Cockpit -> Results -> Component Mark Sheet for Primary and Secondary Schools (.xlsx)',
+        '# Plexo will automatically parse tables across all sheets and extract students by Class, Reg#, Name, and Subject.',
+        'Reg#,Name,Sex,Form Teacher,Class,Teaching Group,CMT,Weightings:,EL - G3',
+        ',,,,,,,,Term 1 WA - 1',
+        '1,ALICE WONG KAI XIN,F,HASLINDA BINTE JAAFAR,1 DILIGENCE,1J31_MARYAM,M,NOT APPLICABLE,75',
+        '2,BRYAN TAN WEI MING,M,HASLINDA BINTE JAAFAR,1 DILIGENCE,1J31_MARYAM,M,NOT APPLICABLE,68',
+        'Reg#,Name,Sex,Form Teacher,Class,Teaching Group,CMT,Weightings:,Maths - G2',
+        ',,,,,,,,Term 1 WA - 1',
+        '1,ALICE WONG KAI XIN,F,HASLINDA BINTE JAAFAR,1 DILIGENCE,1M21_LEE,M,NOT APPLICABLE,82',
+      ].join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', 'Sample_Internal_Mark_Sheet_Template.csv');
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      return;
+    }
+
     const headers = [
       'Academic Level',
       'NRIC/FIN',
@@ -157,6 +236,17 @@ export const CandidateViewport: React.FC = () => {
               <span>Sample Template</span>
             </button>
 
+            {candidates.length > 0 && (
+              <button
+                onClick={() => setIsPurgeModalOpen(true)}
+                className="inline-flex items-center gap-2 px-3.5 py-2.5 bg-white border border-rose-300 hover:border-rose-400 text-rose-700 text-sm font-medium rounded-lg shadow-xs transition-colors cursor-pointer"
+                title="Purge all candidate records and associated allocations from current scope"
+              >
+                <Trash2 className="w-4 h-4 text-rose-500" />
+                <span>Purge Candidates</span>
+              </button>
+            )}
+
             <label className="inline-flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg cursor-pointer shadow-sm transition-colors">
               <Files className="w-4 h-4" />
               <span>{isUploading ? 'Parsing...' : 'Upload Files (.xlsx / .csv)'}</span>
@@ -178,6 +268,56 @@ export const CandidateViewport: React.FC = () => {
             <button onClick={() => setUploadMessage(null)} className="text-emerald-600 hover:text-emerald-800">
               <X className="w-4 h-4" />
             </button>
+          </div>
+        )}
+
+        {/* Level Switcher Bar */}
+        {distinctLevels.length > 0 && (
+          <div className="mt-4 pt-3.5 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-slate-700">
+              <GraduationCap className="w-4 h-4 text-indigo-600" />
+              <span className="text-xs font-bold uppercase tracking-wider">Level Filter:</span>
+            </div>
+
+            <div className="flex flex-wrap items-center p-1 bg-slate-100 rounded-lg border border-slate-200 gap-1">
+              <button
+                type="button"
+                onClick={() => setLevelFilter('ALL')}
+                className={`px-3 py-1 rounded-md text-xs font-semibold transition-all cursor-pointer ${
+                  levelFilter === 'ALL'
+                    ? 'bg-white text-indigo-700 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                All Levels ({candidates.length} candidates)
+              </button>
+
+              {distinctLevels.map((lvl) => {
+                const count = candidates.filter((c) => {
+                  if (c.academicLevel) return getCanonicalLevelName(c.academicLevel) === lvl;
+                  if (c.classGroup) {
+                    const num = extractLevelNumber(c.classGroup);
+                    return num !== undefined && `Secondary ${num}` === lvl;
+                  }
+                  return false;
+                }).length;
+
+                return (
+                  <button
+                    key={lvl}
+                    type="button"
+                    onClick={() => setLevelFilter(lvl)}
+                    className={`px-3 py-1 rounded-md text-xs font-semibold transition-all cursor-pointer ${
+                      levelFilter === lvl
+                        ? 'bg-white text-indigo-700 shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {lvl} ({count})
+                  </button>
+                );
+              })}
+            </div>
           </div>
         )}
       </div>
@@ -223,7 +363,11 @@ export const CandidateViewport: React.FC = () => {
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
-              placeholder="Search candidate by name or 4-digit index..."
+              placeholder={
+                scope === 'internal'
+                  ? 'Search candidate by name, register number, or class...'
+                  : 'Search candidate by name or 4-digit index...'
+              }
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-9 pr-4 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
@@ -231,7 +375,7 @@ export const CandidateViewport: React.FC = () => {
           </div>
 
           <div className="text-xs text-slate-500 font-medium">
-            Showing {filteredCandidates.length} of {candidates.length} candidates
+            Showing {filteredCandidates.length} of {candidates.length} candidates ({scope === 'internal' ? 'Internal School' : 'National SEAB'})
           </div>
         </div>
 
@@ -240,10 +384,18 @@ export const CandidateViewport: React.FC = () => {
           <table className="w-full text-left text-sm text-slate-600">
             <thead className="bg-slate-100/75 text-xs uppercase text-slate-500 font-semibold border-b border-slate-200">
               <tr>
-                <th className="px-4 py-3">Index No (ID)</th>
-                <th className="px-4 py-3">Statutory Name</th>
-                <th className="px-4 py-3">Level</th>
-                <th className="px-4 py-3">Registered Papers</th>
+                <th className="px-4 py-3">
+                  {scope === 'internal' ? 'Class & Reg #' : 'Index No (ID)'}
+                </th>
+                <th className="px-4 py-3">
+                  {scope === 'internal' ? 'Student Name' : 'Statutory Name'}
+                </th>
+                <th className="px-4 py-3">
+                  {scope === 'internal' ? 'Form Teacher / Sex' : 'Level'}
+                </th>
+                <th className="px-4 py-3">
+                  {scope === 'internal' ? 'Enrolled Subjects' : 'Registered Papers'}
+                </th>
                 <th className="px-4 py-3">Access Arrangements (AA)</th>
                 <th className="px-4 py-3 text-right">Actions</th>
               </tr>
@@ -256,7 +408,11 @@ export const CandidateViewport: React.FC = () => {
                       <div className="flex flex-col items-center justify-center gap-2">
                         <Upload className="w-8 h-8 text-slate-300" />
                         <p className="font-medium text-slate-600">No candidates uploaded yet</p>
-                        <p className="text-xs text-slate-400">Upload your SEAB candidate spreadsheet (.xlsx / .csv) above to begin.</p>
+                        <p className="text-xs text-slate-400">
+                          {scope === 'internal'
+                            ? 'Upload your MOE Component Mark Sheet (.xlsx) above to begin.'
+                            : 'Upload your SEAB candidate spreadsheet (.xlsx / .csv) above to begin.'}
+                        </p>
                       </div>
                     ) : (
                       'No candidates match your search query.'
@@ -281,14 +437,36 @@ export const CandidateViewport: React.FC = () => {
 
                   return (
                     <tr key={cand.id} className="hover:bg-slate-50/80 transition-colors">
-                      <td className="px-4 py-3 font-mono font-bold text-slate-900">
-                        {cand.indexNumber}
+                      <td className="px-4 py-3 font-mono">
+                        {scope === 'internal' ? (
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-semibold text-slate-900 bg-slate-100 px-1.5 py-0.5 rounded text-xs">
+                              {cand.classGroup || 'Class'}
+                            </span>
+                            <span className="font-bold text-indigo-700 text-xs">
+                              #{cand.indexNumber}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="font-bold text-slate-900">{cand.indexNumber}</span>
+                        )}
                       </td>
                       <td className="px-4 py-3 font-medium text-slate-800">
                         {cand.fullName}
                       </td>
                       <td className="px-4 py-3 text-xs text-slate-500">
-                        {cand.academicLevel || '—'}
+                        {scope === 'internal' ? (
+                          <div>
+                            <div>{cand.formTeacher || '—'}</div>
+                            {cand.gender && (
+                              <span className="text-[10px] px-1.5 py-0.2 bg-slate-100 text-slate-600 rounded">
+                                Sex: {cand.gender}
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          cand.academicLevel || '—'
+                        )}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex flex-wrap gap-1">
@@ -359,16 +537,25 @@ export const CandidateViewport: React.FC = () => {
                         )}
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <button
-                          onClick={() => setEditingCandidate(cand)}
-                          className={`px-3 py-1 border text-xs font-medium rounded-md shadow-xs transition-colors cursor-pointer ${
-                            hasAnyAA
-                              ? 'bg-purple-50 border-purple-300 text-purple-700 hover:bg-purple-100'
-                              : 'bg-white border-slate-300 hover:border-indigo-500 text-slate-700 hover:text-indigo-600'
-                          }`}
-                        >
-                          {hasAnyAA ? 'Edit AA' : '+ Add AA'}
-                        </button>
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            onClick={() => setEditingCandidate(cand)}
+                            className={`px-3 py-1 border text-xs font-medium rounded-md shadow-xs transition-colors cursor-pointer ${
+                              hasAnyAA
+                                ? 'bg-purple-50 border-purple-300 text-purple-700 hover:bg-purple-100'
+                                : 'bg-white border-slate-300 hover:border-indigo-500 text-slate-700 hover:text-indigo-600'
+                            }`}
+                          >
+                            {hasAnyAA ? 'Edit AA' : '+ Add AA'}
+                          </button>
+                          <button
+                            onClick={() => setCandidateToDelete(cand)}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
+                            title="Delete candidate record"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -378,6 +565,86 @@ export const CandidateViewport: React.FC = () => {
           </table>
         </div>
       </div>
+
+      {/* Purge All Candidates Modal */}
+      {isPurgeModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
+          <div className="bg-white rounded-xl max-w-md w-full p-6 shadow-xl space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="p-2 bg-rose-100 rounded-full">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <h3 className="font-bold text-slate-800 text-lg">Purge Candidate Directory</h3>
+            </div>
+            <p className="text-sm text-slate-600">
+              Are you sure you want to delete all <strong className="text-slate-800">{candidates.length} candidate(s)</strong> from the{' '}
+              <span className="font-semibold text-slate-700">{scope === 'internal' ? 'Internal School' : 'National SEAB'}</span> scope?
+            </p>
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <span>This will also clear all active candidate seating allocations and access arrangements for this cohort.</span>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsPurgeModalOpen(false)}
+                className="px-4 py-2 text-xs font-medium text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const count = candidates.length;
+                  clearCandidates();
+                  setIsPurgeModalOpen(false);
+                  setUploadMessage(`Successfully purged all ${count} candidate record(s) and reset seating allocations.`);
+                }}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-medium rounded-lg shadow-xs transition-colors cursor-pointer"
+              >
+                Confirm Purge
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Single Candidate Modal */}
+      {candidateToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
+          <div className="bg-white rounded-xl max-w-md w-full p-6 shadow-xl space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="p-2 bg-rose-100 rounded-full">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <h3 className="font-bold text-slate-800 text-lg">Delete Candidate</h3>
+            </div>
+            <p className="text-sm text-slate-600">
+              Are you sure you want to remove candidate <strong className="text-slate-800">{candidateToDelete.fullName}</strong> ({candidateToDelete.classGroup ? `${candidateToDelete.classGroup} #${candidateToDelete.indexNumber}` : `Index ${candidateToDelete.indexNumber}`})?
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setCandidateToDelete(null)}
+                className="px-4 py-2 text-xs font-medium text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  deleteCandidate(candidateToDelete.id);
+                  setUploadMessage(`Removed candidate ${candidateToDelete.fullName}.`);
+                  setCandidateToDelete(null);
+                }}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-medium rounded-lg shadow-xs transition-colors cursor-pointer"
+              >
+                Delete Candidate
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* AA Modal / Drawer */}
       {editingCandidate && (

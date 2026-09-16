@@ -1,10 +1,32 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Candidate, ExamPaper, Venue, SeatAllocation, AccessArrangement } from '../types';
+import type { Candidate, ExamPaper, Venue, SeatAllocation, AccessArrangement, ExamScope } from '../types';
 
 export type TabType = 'candidates' | 'timetable' | 'venues' | 'allocation' | 'reports';
 
+export interface ScopeData {
+  candidates: Candidate[];
+  papers: ExamPaper[];
+  allocations: Record<string, SeatAllocation[]>;
+  selectedPaperId: string | null;
+  selectedVenueId: string | null;
+  autoCombineAaVenues?: boolean;
+}
+
+const emptyScopeData = (): ScopeData => ({
+  candidates: [],
+  papers: [],
+  allocations: {},
+  selectedPaperId: null,
+  selectedVenueId: null,
+  autoCombineAaVenues: true,
+});
+
 interface ExamStoreState {
+  scope: ExamScope;
+  nationalData: ScopeData;
+  internalData: ScopeData;
+
   candidates: Candidate[];
   papers: ExamPaper[];
   venues: Venue[];
@@ -12,14 +34,20 @@ interface ExamStoreState {
   activeTab: TabType;
   selectedPaperId: string | null;
   selectedVenueId: string | null;
+  autoCombineAaVenues: boolean;
 
   // Actions
+  setScope: (scope: ExamScope) => void;
+  resetCurrentScope: () => void;
   setActiveTab: (tab: TabType) => void;
   setSelectedPaperId: (id: string | null) => void;
   setSelectedVenueId: (id: string | null) => void;
+  setAutoCombineAaVenues: (autoCombine: boolean) => void;
 
   setCandidates: (candidates: Candidate[]) => void;
   mergeCandidates: (newCandidates: Candidate[]) => void;
+  deleteCandidate: (candidateId: string) => void;
+  clearCandidates: () => void;
   updateCandidateAA: (candidateId: string, arrangements: AccessArrangement, paperCode?: string, applyToAll?: boolean) => void;
   saveCandidateAAConfig: (candidateId: string, defaultAA?: AccessArrangement, paperArrangements?: Record<string, AccessArrangement>) => void;
 
@@ -33,6 +61,7 @@ interface ExamStoreState {
   deleteUnenrolledPapers: () => void;
 
   setVenues: (venues: Venue[]) => void;
+  mergeVenues: (newVenues: Venue[]) => void;
   addVenue: (venue: Venue) => void;
   updateVenue: (venue: Venue) => void;
   deleteVenue: (venueId: string) => void;
@@ -50,6 +79,10 @@ interface ExamStoreState {
 export const useExamStore = create<ExamStoreState>()(
   persist(
     (set) => ({
+      scope: 'national',
+      nationalData: emptyScopeData(),
+      internalData: emptyScopeData(),
+
       candidates: [],
       papers: [],
       venues: [],
@@ -57,10 +90,58 @@ export const useExamStore = create<ExamStoreState>()(
       activeTab: 'candidates',
       selectedPaperId: null,
       selectedVenueId: null,
+      autoCombineAaVenues: true,
+
+      setScope: (newScope) =>
+        set((state) => {
+          if (state.scope === newScope) return state;
+
+          const currentSnapshot: ScopeData = {
+            candidates: state.candidates,
+            papers: state.papers,
+            allocations: state.allocations,
+            selectedPaperId: state.selectedPaperId,
+            selectedVenueId: state.selectedVenueId,
+            autoCombineAaVenues: state.autoCombineAaVenues,
+          };
+
+          const targetSnapshot =
+            newScope === 'national'
+              ? state.nationalData || emptyScopeData()
+              : state.internalData || emptyScopeData();
+
+          return {
+            scope: newScope,
+            candidates: targetSnapshot.candidates || [],
+            papers: targetSnapshot.papers || [],
+            allocations: targetSnapshot.allocations || {},
+            selectedPaperId: targetSnapshot.selectedPaperId || null,
+            selectedVenueId: targetSnapshot.selectedVenueId || null,
+            autoCombineAaVenues: targetSnapshot.autoCombineAaVenues ?? true,
+            nationalData: state.scope === 'national' ? currentSnapshot : state.nationalData,
+            internalData: state.scope === 'internal' ? currentSnapshot : state.internalData,
+          };
+        }),
+
+      resetCurrentScope: () =>
+        set((state) => {
+          const cleared = emptyScopeData();
+          return {
+            candidates: [],
+            papers: [],
+            allocations: {},
+            selectedPaperId: null,
+            selectedVenueId: null,
+            autoCombineAaVenues: true,
+            nationalData: state.scope === 'national' ? cleared : state.nationalData,
+            internalData: state.scope === 'internal' ? cleared : state.internalData,
+          };
+        }),
 
       setActiveTab: (activeTab) => set({ activeTab }),
       setSelectedPaperId: (selectedPaperId) => set({ selectedPaperId }),
       setSelectedVenueId: (selectedVenueId) => set({ selectedVenueId }),
+      setAutoCombineAaVenues: (autoCombineAaVenues) => set({ autoCombineAaVenues }),
 
       setCandidates: (candidates) => set({ candidates }),
       mergeCandidates: (newCandidates) =>
@@ -78,8 +159,13 @@ export const useExamStore = create<ExamStoreState>()(
                 ...existing,
                 fullName: existing.fullName || incoming.fullName,
                 academicLevel: existing.academicLevel || incoming.academicLevel,
+                classGroup: existing.classGroup || incoming.classGroup,
                 schoolName: existing.schoolName || incoming.schoolName,
                 examCentreCode: existing.examCentreCode || incoming.examCentreCode,
+                gender: existing.gender || incoming.gender,
+                formTeacher: existing.formTeacher || incoming.formTeacher,
+                teachingGroup: existing.teachingGroup || incoming.teachingGroup,
+                stream: existing.stream || incoming.stream,
                 subjectCodes: combinedSubjects,
                 // preserve arrangements if existing has it
                 arrangements: existing.arrangements || incoming.arrangements,
@@ -90,11 +176,39 @@ export const useExamStore = create<ExamStoreState>()(
             }
           });
 
-          const merged = Array.from(map.values()).sort((a, b) =>
-            a.indexNumber.localeCompare(b.indexNumber)
-          );
+          const merged = Array.from(map.values()).sort((a, b) => {
+            if (a.classGroup && b.classGroup && a.classGroup !== b.classGroup) {
+              return a.classGroup.localeCompare(b.classGroup, undefined, { numeric: true, sensitivity: 'base' });
+            }
+            return a.indexNumber.localeCompare(b.indexNumber, undefined, { numeric: true });
+          });
           return { candidates: merged };
         }),
+      deleteCandidate: (candidateId) =>
+        set((state) => {
+          const updatedCandidates = state.candidates.filter((c) => c.id !== candidateId);
+          const updatedAllocs: Record<string, SeatAllocation[]> = {};
+          Object.entries(state.allocations).forEach(([paperId, allocs]) => {
+            updatedAllocs[paperId] = allocs.filter((a) => a.candidateId !== candidateId);
+          });
+          return {
+            candidates: updatedCandidates,
+            allocations: updatedAllocs,
+          };
+        }),
+      clearCandidates: () =>
+        set((state) => ({
+          candidates: [],
+          allocations: {},
+          nationalData:
+            state.scope === 'national'
+              ? { ...state.nationalData, candidates: [], allocations: {} }
+              : state.nationalData,
+          internalData:
+            state.scope === 'internal'
+              ? { ...state.internalData, candidates: [], allocations: {} }
+              : state.internalData,
+        })),
       updateCandidateAA: (candidateId, arrangements, paperCode, applyToAll) =>
         set((state) => ({
           candidates: state.candidates.map((c) => {
@@ -134,12 +248,27 @@ export const useExamStore = create<ExamStoreState>()(
       mergePapers: (newPapers) =>
         set((state) => {
           const map = new Map<string, ExamPaper>();
-          state.papers.forEach((p) => map.set(p.code, p));
-          newPapers.forEach((incoming) => {
-            if (!map.has(incoming.code)) {
-              map.set(incoming.code, incoming);
+          // Index existing papers by unique ID
+          state.papers.forEach((p) => map.set(p.id, p));
+
+          // Prune placeholder base papers if incoming papers provide specific components (e.g. Maths - G3/P1, Maths - G3/P2)
+          const incomingBaseCodes = new Set(
+            newPapers.filter((p) => p.baseSubjectCode && p.code !== p.baseSubjectCode).map((p) => p.baseSubjectCode!)
+          );
+
+          if (incomingBaseCodes.size > 0) {
+            for (const [id, paper] of Array.from(map.entries())) {
+              if (incomingBaseCodes.has(paper.code) && !paper.code.includes('/')) {
+                map.delete(id);
+              }
             }
+          }
+
+          // Incoming timetable papers overwrite existing
+          newPapers.forEach((incoming) => {
+            map.set(incoming.id, incoming);
           });
+
           const merged = Array.from(map.values()).sort((a, b) => {
             const dateCmp = a.date.localeCompare(b.date);
             if (dateCmp !== 0) return dateCmp;
@@ -200,6 +329,24 @@ export const useExamStore = create<ExamStoreState>()(
         }),
 
       setVenues: (venues) => set({ venues }),
+      mergeVenues: (newVenues) =>
+        set((state) => {
+          const map = new Map<string, Venue>();
+          state.venues.forEach((v) => map.set(v.name.trim().toLowerCase(), v));
+          newVenues.forEach((incoming) => {
+            const key = incoming.name.trim().toLowerCase();
+            if (map.has(key)) {
+              const existing = map.get(key)!;
+              map.set(key, {
+                ...incoming,
+                id: existing.id,
+              });
+            } else {
+              map.set(key, incoming);
+            }
+          });
+          return { venues: Array.from(map.values()) };
+        }),
       addVenue: (venue) => set((state) => ({ venues: [...state.venues, venue] })),
       updateVenue: (venue) =>
         set((state) => ({
@@ -296,6 +443,8 @@ export const useExamStore = create<ExamStoreState>()(
           allocations: {},
           selectedPaperId: null,
           selectedVenueId: null,
+          nationalData: emptyScopeData(),
+          internalData: emptyScopeData(),
         }),
     }),
     {

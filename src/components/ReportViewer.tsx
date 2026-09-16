@@ -1,8 +1,14 @@
 import React, { useState, useMemo } from 'react';
 import { useExamStore } from '../store/useExamStore';
 import { getCandidatePaperArrangement } from '../types';
-import type { ExamPaper } from '../types';
-import { arePapersConcurrent } from '../services/allocationEngine';
+import type { ExamPaper, AccessArrangement } from '../types';
+import { 
+  arePapersConcurrent,
+  getPaperLevel,
+  getDistinctLevels,
+  extractLevelNumber,
+  getCanonicalLevelName
+} from '../services/allocationEngine';
 import { 
   Printer, 
   Download, 
@@ -12,12 +18,17 @@ import {
   DoorOpen, 
   Building2, 
   Monitor, 
-  Ban
+  Ban, 
+  Award, 
+  Search, 
+  UserCheck, 
+  Scissors,
+  GraduationCap
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import plexoLogo from '../assets/plexo-logo.png';
 
-export type ReportType = 'ROOM_USE_OVERVIEW' | 'DOOR_CARD' | 'DESK_SLIPS' | 'INVIGILATOR_MATRIX';
+export type ReportType = 'ROOM_USE_OVERVIEW' | 'DOOR_CARD' | 'DESK_SLIPS' | 'INVIGILATOR_MATRIX' | 'ENTRY_PROOF';
 
 function formatExamDate(dateStr?: string) {
   if (!dateStr) return { dayOfWeek: '', formattedDate: '', fullHeader: '' };
@@ -36,8 +47,21 @@ function formatExamDate(dateStr?: string) {
 }
 
 export const ReportViewer: React.FC = () => {
-  const { papers, candidates, venues, allocations } = useExamStore();
+  const { scope, papers, candidates, venues, allocations } = useExamStore();
   const [reportType, setReportType] = useState<ReportType>('ROOM_USE_OVERVIEW');
+
+  // Academic level filter for reports
+  const [reportLevelFilter, setReportLevelFilter] = useState<string>('ALL');
+
+  // Discover all distinct academic levels from schedule
+  const distinctLevels = useMemo(() => {
+    return getDistinctLevels(papers, candidates);
+  }, [papers, candidates]);
+
+  // Entry Proof state
+  const [entryProofClass, setEntryProofClass] = useState<string>('ALL');
+  const [entryProofSearch, setEntryProofSearch] = useState<string>('');
+  const [entryProofLayout, setEntryProofLayout] = useState<'1_UP' | '2_UP'>('1_UP');
 
   // Distinct dates in the schedule for Room Use Overview
   const distinctDates = useMemo(() => {
@@ -52,10 +76,12 @@ export const ReportViewer: React.FC = () => {
   const activeDate = selectedDate || distinctDates[0] || '';
   const dateInfo = useMemo(() => formatExamDate(activeDate), [activeDate]);
 
-  // Papers scheduled on activeDate
+  // Papers scheduled on activeDate (filtered by Level if selected)
   const dayPapers = useMemo(() => {
-    return papers.filter((p) => p.date === activeDate);
-  }, [papers, activeDate]);
+    const onDate = papers.filter((p) => p.date === activeDate);
+    if (reportLevelFilter === 'ALL') return onDate;
+    return onDate.filter((p) => getPaperLevel(p, candidates) === reportLevelFilter);
+  }, [papers, activeDate, reportLevelFilter, candidates]);
 
   // Group papers by consolidated time slot on activeDate
   const dayTimeSlots = useMemo(() => {
@@ -84,10 +110,20 @@ export const ReportViewer: React.FC = () => {
       });
   }, [dayPapers]);
 
+  // Papers filtered by level for Door Card / Desk Slips / Invigilator Matrix
+  const displayedReportPapers = useMemo(() => {
+    if (reportLevelFilter === 'ALL') return papers;
+    return papers.filter((p) => getPaperLevel(p, candidates) === reportLevelFilter);
+  }, [papers, candidates, reportLevelFilter]);
+
   // Current active paper for Door Card / Desk Slips
   const currentPaper = useMemo(() => {
-    return papers.find((p) => p.id === selectedPaperId) || papers[0] || null;
-  }, [papers, selectedPaperId]);
+    const inDisplayed = displayedReportPapers.find((p) => p.id === selectedPaperId);
+    if (inDisplayed) return inDisplayed;
+    const inAll = papers.find((p) => p.id === selectedPaperId);
+    if (inAll && reportLevelFilter === 'ALL') return inAll;
+    return displayedReportPapers[0] || papers[0] || null;
+  }, [papers, displayedReportPapers, selectedPaperId, reportLevelFilter]);
 
   const currentAllocations = useMemo(() => {
     if (!currentPaper) return [];
@@ -140,8 +176,120 @@ export const ReportViewer: React.FC = () => {
         };
       })
       .filter(Boolean)
-      .sort((a, b) => a!.candidate.indexNumber.localeCompare(b!.candidate.indexNumber));
+      .sort((a, b) => a!.candidate.indexNumber.localeCompare(b!.candidate.indexNumber, undefined, { numeric: true }));
   }, [filteredAllocations, candidates, venues, currentPaper]);
+
+  // Distinct classes for Entry Proof filtering (filtered by Level if selected)
+  const distinctClasses = useMemo(() => {
+    let candList = candidates;
+    if (reportLevelFilter !== 'ALL') {
+      candList = candidates.filter((c) => {
+        const lvl = c.academicLevel ? getCanonicalLevelName(c.academicLevel) : undefined;
+        if (lvl) return lvl === reportLevelFilter;
+        if (c.classGroup) {
+          const num = extractLevelNumber(c.classGroup);
+          return num !== undefined && `Secondary ${num}` === reportLevelFilter;
+        }
+        return false;
+      });
+    }
+    const classes = Array.from(
+      new Set(candList.map((c) => c.classGroup).filter(Boolean) as string[])
+    ).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+    return classes;
+  }, [candidates, reportLevelFilter]);
+
+  // Enriched entry proofs for each student
+  const entryProofStudents = useMemo(() => {
+    let filtered = [...candidates];
+
+    if (reportLevelFilter !== 'ALL') {
+      filtered = filtered.filter((c) => {
+        const lvl = c.academicLevel ? getCanonicalLevelName(c.academicLevel) : undefined;
+        if (lvl) return lvl === reportLevelFilter;
+        if (c.classGroup) {
+          const num = extractLevelNumber(c.classGroup);
+          return num !== undefined && `Secondary ${num}` === reportLevelFilter;
+        }
+        return false;
+      });
+    }
+
+    if (entryProofClass !== 'ALL') {
+      filtered = filtered.filter((c) => c.classGroup === entryProofClass);
+    }
+
+    if (entryProofSearch.trim()) {
+      const q = entryProofSearch.toLowerCase().trim();
+      filtered = filtered.filter(
+        (c) =>
+          c.fullName.toLowerCase().includes(q) ||
+          c.indexNumber.includes(q) ||
+          (c.classGroup && c.classGroup.toLowerCase().includes(q))
+      );
+    }
+
+    filtered.sort((a, b) => {
+      if (a.classGroup && b.classGroup && a.classGroup !== b.classGroup) {
+        return a.classGroup.localeCompare(b.classGroup, undefined, { numeric: true, sensitivity: 'base' });
+      }
+      return a.indexNumber.localeCompare(b.indexNumber, undefined, { numeric: true });
+    });
+
+    return filtered.map((candidate) => {
+      const enrolledSet = new Set(candidate.subjectCodes);
+
+      const studentPapers = papers.filter((paper) => {
+        if (enrolledSet.has(paper.code)) return true;
+        if (paper.baseSubjectCode && enrolledSet.has(paper.baseSubjectCode)) return true;
+        if (paper.code.startsWith('MTL - ')) {
+          const stream = paper.stream || 'G3';
+          if (
+            enrolledSet.has(`CL - ${stream}`) ||
+            enrolledSet.has(`ML - ${stream}`) ||
+            enrolledSet.has(`TL - ${stream}`)
+          ) {
+            return true;
+          }
+        }
+        return allocations[paper.id]?.some((a) => a.candidateId === candidate.id);
+      });
+
+      studentPapers.sort((a, b) => {
+        const dateCmp = a.date.localeCompare(b.date);
+        if (dateCmp !== 0) return dateCmp;
+        return a.startTime.localeCompare(b.startTime);
+      });
+
+      const entries = studentPapers.map((paper) => {
+        const alloc = allocations[paper.id]?.find((a) => a.candidateId === candidate.id);
+        const venue = alloc ? venues.find((v) => v.id === alloc.venueId) : null;
+
+        const [h, m] = paper.startTime.split(':').map(Number);
+        const totalEnd = (h || 0) * 60 + (m || 0) + (paper.durationMins || 60);
+        const endH = String(Math.floor(totalEnd / 60) % 24).padStart(2, '0');
+        const endM = String(totalEnd % 60).padStart(2, '0');
+        const endTime = `${endH}:${endM}`;
+
+        return {
+          paper,
+          date: paper.date,
+          startTime: paper.startTime,
+          endTime,
+          durationMins: paper.durationMins,
+          venueName: venue ? venue.name : alloc ? 'Assigned' : 'Unallocated',
+          seatLabel: alloc ? alloc.seatLabel : '—',
+          shiftIndex: alloc?.shiftIndex,
+          isAllocated: Boolean(alloc),
+        };
+      });
+
+      return {
+        candidate,
+        entries,
+      };
+    });
+  }, [candidates, papers, allocations, venues, entryProofClass, entryProofSearch, reportLevelFilter]);
 
   const handlePrint = () => {
     window.print();
@@ -211,6 +359,7 @@ export const ReportViewer: React.FC = () => {
           const cand = candidates.find((c) => c.id === a.candidateId);
           data.push({
             'Paper Code': currentPaper?.code,
+            'Paper Level': currentPaper?.level || '',
             'Exam Date': currentPaper?.date,
             'Venue': v.name,
             'Desk Label': a.seatLabel,
@@ -226,11 +375,52 @@ export const ReportViewer: React.FC = () => {
       return;
     }
 
+    if (reportType === 'ENTRY_PROOF') {
+      const data: any[] = [];
+      entryProofStudents.forEach((student) => {
+        student.entries.forEach((entry) => {
+          data.push({
+            'Candidate Name': student.candidate.fullName,
+            'Class': student.candidate.classGroup || '',
+            'Reg No / Index': student.candidate.indexNumber,
+            'Academic Level': student.candidate.academicLevel || '',
+            'Form Teacher': student.candidate.formTeacher || '',
+            'Exam Date': entry.date,
+            'Start Time': entry.startTime,
+            'End Time': entry.endTime,
+            'Duration (Mins)': entry.durationMins,
+            'Paper Code': entry.paper.code,
+            'Paper Title': entry.paper.title,
+            'Paper Level': entry.paper.level || '',
+            'Venue': entry.venueName,
+            'Seat Number': entry.seatLabel,
+            'Shift': entry.shiftIndex && entry.shiftIndex > 1 ? `Shift ${entry.shiftIndex}` : 'Standard',
+            'Allocation Status': entry.isAllocated ? 'Allocated' : 'Pending Allocation',
+            'Access Arrangements': (() => {
+              const arr = getCandidatePaperArrangement(student.candidate, entry.paper.code);
+              return arr && ((arr.extraTimePct ?? 0) > 0 || arr.needsSeparateRoom || arr.frontSeatMobility || arr.remarks)
+                ? `Extra Time: +${arr.extraTimePct || 0}%${arr.needsSeparateRoom ? ', Sep Room' : ''}${arr.frontSeatMobility ? ', Front Row' : ''}${arr.remarks ? ` (${arr.remarks})` : ''}`
+                : 'None';
+            })(),
+          });
+        });
+      });
+
+      const worksheet = XLSX.utils.json_to_sheet(data);
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'EntryProofs');
+      XLSX.writeFile(
+        workbook,
+        `Plexo_Entry_Proofs_${entryProofClass === 'ALL' ? 'All_Classes' : entryProofClass.replace(/\s+/g, '_')}.xlsx`
+      );
+      return;
+    }
+
     const data = reportItems.map((item) => ({
       'Index Number': item!.candidate.indexNumber,
       'Candidate Name': item!.candidate.fullName,
       'Academic Level': item!.candidate.academicLevel || '',
       'Paper Code': item!.paper.code,
+      'Paper Level': item!.paper.level || '',
       'Paper Title': item!.paper.title,
       'Exam Date': item!.paper.date,
       'Start Time': item!.paper.startTime,
@@ -331,10 +521,75 @@ export const ReportViewer: React.FC = () => {
               <FileText className="w-3.5 h-3.5 text-slate-500" />
               <span>Attendance Matrix</span>
             </button>
+
+            <button
+              onClick={() => setReportType('ENTRY_PROOF')}
+              className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                reportType === 'ENTRY_PROOF'
+                  ? 'bg-white text-indigo-700 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Award className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Candidate Entry Proof</span>
+            </button>
           </div>
 
           {/* Conditional Filters depending on active report */}
-          {reportType === 'ROOM_USE_OVERVIEW' ? (
+          {reportType === 'ENTRY_PROOF' ? (
+            <div className="flex flex-wrap items-center gap-3">
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">
+                  Filter by Class
+                </label>
+                <select
+                  value={entryProofClass}
+                  onChange={(e) => setEntryProofClass(e.target.value)}
+                  className="px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:outline-none cursor-pointer"
+                >
+                  <option value="ALL">All Classes ({candidates.length} candidates)</option>
+                  {distinctClasses.map((cls) => {
+                    const count = candidates.filter((c) => c.classGroup === cls).length;
+                    return (
+                      <option key={cls} value={cls}>
+                        {cls} ({count} candidates)
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">
+                  Search Candidate
+                </label>
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    placeholder="Search name, reg#, index..."
+                    value={entryProofSearch}
+                    onChange={(e) => setEntryProofSearch(e.target.value)}
+                    className="pl-8 pr-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:outline-none w-52"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">
+                  Print Layout
+                </label>
+                <select
+                  value={entryProofLayout}
+                  onChange={(e) => setEntryProofLayout(e.target.value as '1_UP' | '2_UP')}
+                  className="px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:outline-none cursor-pointer"
+                >
+                  <option value="1_UP">1 Student Per A4 Sheet</option>
+                  <option value="2_UP">2 Students Per A4 Sheet (Paper Saver)</option>
+                </select>
+              </div>
+            </div>
+          ) : reportType === 'ROOM_USE_OVERVIEW' ? (
             <div className="flex items-center gap-3">
               <div>
                 <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">
@@ -368,11 +623,27 @@ export const ReportViewer: React.FC = () => {
                   onChange={(e) => setSelectedPaperId(e.target.value)}
                   className="px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-medium text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 >
-                  {papers.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.code} — {p.title}
-                    </option>
-                  ))}
+                  {reportLevelFilter === 'ALL' && distinctLevels.length > 0 ? (
+                    distinctLevels.map((lvl) => {
+                      const lvlPapers = papers.filter((p) => getPaperLevel(p, candidates) === lvl);
+                      if (lvlPapers.length === 0) return null;
+                      return (
+                        <optgroup key={lvl} label={lvl}>
+                          {lvlPapers.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.code} — {p.title}
+                            </option>
+                          ))}
+                        </optgroup>
+                      );
+                    })
+                  ) : (
+                    displayedReportPapers.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.code} — {p.title}
+                      </option>
+                    ))
+                  )}
                 </select>
               </div>
 
@@ -396,6 +667,48 @@ export const ReportViewer: React.FC = () => {
             </div>
           )}
         </div>
+
+        {/* Level Switcher Bar for Reports */}
+        {distinctLevels.length > 0 && (
+          <div className="mt-4 pt-3.5 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-slate-700">
+              <GraduationCap className="w-4 h-4 text-indigo-600" />
+              <span className="text-xs font-bold uppercase tracking-wider">Level Filter:</span>
+            </div>
+
+            <div className="flex flex-wrap items-center p-1 bg-slate-100 rounded-lg border border-slate-200 gap-1">
+              <button
+                type="button"
+                onClick={() => setReportLevelFilter('ALL')}
+                className={`px-3 py-1 rounded-md text-xs font-semibold transition-all cursor-pointer ${
+                  reportLevelFilter === 'ALL'
+                    ? 'bg-white text-indigo-700 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                All Levels ({papers.length} papers)
+              </button>
+
+              {distinctLevels.map((lvl) => {
+                const count = papers.filter((p) => getPaperLevel(p, candidates) === lvl).length;
+                return (
+                  <button
+                    key={lvl}
+                    type="button"
+                    onClick={() => setReportLevelFilter(lvl)}
+                    className={`px-3 py-1 rounded-md text-xs font-semibold transition-all cursor-pointer ${
+                      reportLevelFilter === lvl
+                        ? 'bg-white text-indigo-700 shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {lvl} ({count})
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Report Content Container */}
@@ -606,6 +919,11 @@ export const ReportViewer: React.FC = () => {
                           <span className="text-xs font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
                             {dateDetails.dayOfWeek}
                           </span>
+                          {currentPaper.level && (
+                            <span className="text-xs font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                              {currentPaper.level}
+                            </span>
+                          )}
                           {hasCombinedPapers && (
                             <span className="text-xs font-bold text-purple-700 bg-purple-50 px-2 py-0.5 rounded border border-purple-200">
                               Combined Venue (+{concurrentPapersInRoom.map((p) => p.code).join(', ')})
@@ -710,12 +1028,19 @@ export const ReportViewer: React.FC = () => {
                                   </div>
                                 </div>
 
-                                {/* ONLY Candidate Number (Strictly NO NAMES) */}
+                                {/* Candidate Number / Class Identifier */}
                                 {candidate ? (
                                   <div className="flex flex-col items-center justify-center my-auto">
-                                    <span className="font-mono font-black text-base text-slate-950 bg-slate-100 px-2 py-0.5 rounded border border-slate-300 tracking-wider">
-                                      {candidate.indexNumber}
-                                    </span>
+                                    <div className="flex flex-col items-center">
+                                      {candidate.classGroup && (
+                                        <span className="text-[10px] font-bold text-slate-700 bg-slate-200/90 px-1.5 py-0.2 rounded mb-0.5">
+                                          {candidate.classGroup}
+                                        </span>
+                                      )}
+                                      <span className="font-mono font-black text-base text-slate-950 bg-slate-100 px-2 py-0.5 rounded border border-slate-300 tracking-wider">
+                                        {candidate.classGroup ? `#${candidate.indexNumber}` : candidate.indexNumber}
+                                      </span>
+                                    </div>
                                     {alloc?.shiftIndex && alloc.shiftIndex > 1 && (
                                       <span className="text-[9px] font-bold text-purple-700 bg-purple-100 px-1.5 py-0.2 rounded mt-0.5">
                                         Shift {alloc.shiftIndex}
@@ -725,7 +1050,9 @@ export const ReportViewer: React.FC = () => {
                                 ) : concurrentAlloc ? (
                                   <div className="flex flex-col items-center justify-center my-auto">
                                     <span className="font-mono font-black text-base text-purple-950 bg-purple-100 px-2 py-0.5 rounded border border-purple-300 tracking-wider">
-                                      {concurrentCand?.indexNumber || concurrentAlloc.candidateId}
+                                      {concurrentCand?.classGroup
+                                        ? `${concurrentCand.classGroup} #${concurrentCand.indexNumber}`
+                                        : concurrentCand?.indexNumber || concurrentAlloc.candidateId}
                                     </span>
                                     <span className="text-[9px] font-bold text-purple-700 mt-0.5">
                                       {concurrentPaper?.code}
@@ -801,7 +1128,7 @@ export const ReportViewer: React.FC = () => {
                       <div>
                         <div className="flex items-center justify-between border-b border-slate-300 pb-2 mb-2">
                           <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500">
-                            SEAB Examination Desk Slip
+                            {scope === 'internal' ? 'School Examination Desk Slip' : 'SEAB Examination Desk Slip'}
                           </span>
                           <span className="font-mono text-xs font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded">
                             {item!.venue.name}
@@ -809,12 +1136,26 @@ export const ReportViewer: React.FC = () => {
                         </div>
 
                         <div className="flex items-start justify-between gap-2 mt-2">
-                          <div>
-                            <p className="text-[11px] text-slate-500">Index Number</p>
-                            <p className="font-mono font-black text-2xl text-slate-900 leading-tight">
-                              {item!.candidate.indexNumber}
-                            </p>
-                          </div>
+                          {item!.candidate.classGroup ? (
+                            <div>
+                              <p className="text-[11px] text-slate-500">Class & Reg No</p>
+                              <div className="flex items-baseline gap-1.5 mt-0.5">
+                                <span className="text-xs font-bold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded">
+                                  {item!.candidate.classGroup}
+                                </span>
+                                <span className="font-mono font-black text-2xl text-slate-900 leading-tight">
+                                  #{item!.candidate.indexNumber}
+                                </span>
+                              </div>
+                            </div>
+                          ) : (
+                            <div>
+                              <p className="text-[11px] text-slate-500">Index Number</p>
+                              <p className="font-mono font-black text-2xl text-slate-900 leading-tight">
+                                {item!.candidate.indexNumber}
+                              </p>
+                            </div>
+                          )}
                           <div className="text-right">
                             <p className="text-[11px] text-slate-500">Seat Label</p>
                             <p className="font-mono font-black text-2xl text-indigo-700 leading-tight">
@@ -893,7 +1234,9 @@ export const ReportViewer: React.FC = () => {
                       Invigilator Attendance & Script Verification Matrix
                     </h1>
                     <p className="text-xs text-slate-600 mt-1">
-                      Paper: <strong>{currentPaper?.code} — {currentPaper?.title}</strong> • Date: <strong>{currentPaper?.date}</strong>
+                      Paper: <strong>{currentPaper?.code} — {currentPaper?.title}</strong>
+                      {currentPaper?.level && <span className="ml-1 text-blue-700 font-semibold">({currentPaper.level})</span>}
+                      {' '}• Date: <strong>{currentPaper?.date}</strong>
                     </p>
                   </div>
                   <div className="flex items-center gap-4">
@@ -911,7 +1254,9 @@ export const ReportViewer: React.FC = () => {
                     <thead className="bg-slate-100 text-slate-800 font-bold border-b border-slate-300">
                       <tr>
                         <th className="px-3 py-2 border-r border-slate-300 w-16 text-center">Seat</th>
-                        <th className="px-3 py-2 border-r border-slate-300 w-20">Index</th>
+                        <th className="px-3 py-2 border-r border-slate-300 w-24">
+                          {scope === 'internal' ? 'Class & Reg#' : 'Index'}
+                        </th>
                         <th className="px-3 py-2 border-r border-slate-300">Candidate Name</th>
                         <th className="px-3 py-2 border-r border-slate-300 w-28">Venue</th>
                         <th className="px-3 py-2 border-r border-slate-300 w-20 text-center">Absent [ ]</th>
@@ -926,7 +1271,9 @@ export const ReportViewer: React.FC = () => {
                             {item!.allocation.seatLabel}
                           </td>
                           <td className="px-3 py-2.5 font-mono font-black text-slate-900 border-r border-slate-200">
-                            {item!.candidate.indexNumber}
+                            {item!.candidate.classGroup
+                              ? `${item!.candidate.classGroup} #${item!.candidate.indexNumber}`
+                              : item!.candidate.indexNumber}
                           </td>
                           <td className="px-3 py-2.5 font-semibold text-slate-800 border-r border-slate-200">
                             {item!.candidate.fullName}
@@ -963,6 +1310,256 @@ export const ReportViewer: React.FC = () => {
                     <p className="text-slate-500 uppercase text-[10px]">Chief Invigilator Signature</p>
                     <p className="text-base font-bold text-slate-800 mt-1">__________________</p>
                   </div>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* 5. Candidate Entry Proof & Timetable Slips */}
+        {reportType === 'ENTRY_PROOF' && (
+          <div className="space-y-6">
+            {entryProofStudents.length === 0 ? (
+              <div className="no-print p-12 text-center text-slate-400 border border-dashed border-slate-300 rounded-xl">
+                <Award className="w-10 h-10 mx-auto text-slate-300 mb-2" />
+                <p className="font-semibold text-slate-700">No Candidates Found</p>
+                <p className="text-xs text-slate-400 mt-1">
+                  {candidates.length === 0
+                    ? 'Upload candidates in Stage 1 to generate official Entry Proofs.'
+                    : 'No candidates match your current class filter or search query.'}
+                </p>
+              </div>
+            ) : (
+              <>
+                {/* Print count banner (hidden in print) */}
+                <div className="no-print p-3.5 bg-indigo-50 border border-indigo-200 rounded-xl flex items-center justify-between text-xs text-indigo-900">
+                  <div className="flex items-center gap-2">
+                    <UserCheck className="w-4 h-4 text-indigo-600" />
+                    <span>
+                      Ready to print <strong>{entryProofStudents.length}</strong> Student Entry Proof(s) in{' '}
+                      <strong>{entryProofLayout === '1_UP' ? '1 Per Page' : '2 Per Page (Paper Saver)'}</strong> format.
+                    </span>
+                  </div>
+                  <button
+                    onClick={handlePrint}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold shadow-xs cursor-pointer"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    <span>Print All Entry Proofs</span>
+                  </button>
+                </div>
+
+                {/* Entry Proof Cards list */}
+                <div className="space-y-6">
+                  {entryProofStudents.map((student, studentIdx) => {
+                    const candidate = student.candidate;
+                    const defaultAA = candidate.arrangements;
+                    const isEven = studentIdx % 2 === 1;
+
+                    return (
+                      <div
+                        key={candidate.id}
+                        className={`bg-white border-2 border-slate-800 rounded-xl p-6 print:p-5 print:rounded-none shadow-xs text-slate-900 ${
+                          entryProofLayout === '1_UP'
+                            ? 'page-break-after'
+                            : isEven
+                            ? 'page-break-after'
+                            : ''
+                        }`}
+                      >
+                        {/* Header: School & Title */}
+                        <div className="border-b-2 border-slate-800 pb-3 flex items-start justify-between gap-4">
+                          <div>
+                            <h2 className="text-base font-black uppercase tracking-wider text-slate-900">
+                              {candidate.schoolName || (scope === 'internal' ? 'CANBERRA SECONDARY SCHOOL' : 'SINGAPORE EXAMINATIONS AND ASSESSMENT BOARD')}
+                            </h2>
+                            <p className="text-xs font-bold text-indigo-800 uppercase tracking-wide mt-0.5">
+                              {scope === 'internal' ? '2026 End-of-Year Examination' : 'National Examination'} • Student Entry Proof & Timetable
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <span className="no-print font-mono text-xs text-slate-500 font-semibold bg-slate-100 px-2 py-1 rounded">
+                              #{studentIdx + 1} of {entryProofStudents.length}
+                            </span>
+                            <img src={plexoLogo} alt="Plexo" className="h-9 w-auto object-contain rounded" />
+                          </div>
+                        </div>
+
+                        {/* Student Particulars Banner */}
+                        <div className="my-3 p-3 bg-slate-50 border border-slate-300 rounded-lg grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                          <div>
+                            <span className="text-[10px] uppercase font-bold text-slate-500 block">Candidate Full Name</span>
+                            <span className="font-bold text-sm text-slate-900 leading-tight block truncate" title={candidate.fullName}>
+                              {candidate.fullName}
+                            </span>
+                          </div>
+
+                          <div>
+                            <span className="text-[10px] uppercase font-bold text-slate-500 block">
+                              {candidate.classGroup ? 'Class & Reg #' : 'Index Number'}
+                            </span>
+                            <div className="flex items-baseline gap-1 mt-0.5">
+                              {candidate.classGroup && (
+                                <span className="font-bold text-slate-800 bg-white border border-slate-300 px-1.5 py-0.2 rounded text-[11px]">
+                                  {candidate.classGroup}
+                                </span>
+                              )}
+                              <span className="font-mono font-black text-sm text-indigo-900">
+                                {candidate.classGroup ? `#${candidate.indexNumber}` : candidate.indexNumber}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div>
+                            <span className="text-[10px] uppercase font-bold text-slate-500 block">Level / Stream</span>
+                            <span className="font-semibold text-slate-800 mt-0.5 block">
+                              {candidate.academicLevel || 'Secondary 1'}{candidate.stream ? ` (${candidate.stream})` : ''}
+                            </span>
+                          </div>
+
+                          <div>
+                            <span className="text-[10px] uppercase font-bold text-slate-500 block">Form Teacher</span>
+                            <span className="font-semibold text-slate-800 mt-0.5 block truncate">
+                              {candidate.formTeacher || '—'}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Access Arrangements Alert if flagged */}
+                        {(() => {
+                          const paperAAs = candidate.paperArrangements ? Object.values(candidate.paperArrangements) : [];
+                          const allAAs = [defaultAA, ...paperAAs].filter(Boolean) as AccessArrangement[];
+                          const hasAA = allAAs.some(
+                            (a) => (a.extraTimePct ?? 0) > 0 || a.needsSeparateRoom || a.frontSeatMobility || a.remarks
+                          );
+                          if (!hasAA) return null;
+
+                          return (
+                            <div className="mb-3 px-3 py-2 bg-amber-50 border border-amber-300 rounded text-xs text-amber-900 flex flex-wrap items-center gap-2">
+                              <span className="font-bold uppercase tracking-wide text-[10px] bg-amber-200 px-1.5 py-0.5 rounded">
+                                Access Arrangement Approved:
+                              </span>
+                              {defaultAA?.extraTimePct ? (
+                                <span className="font-semibold">+{defaultAA.extraTimePct}% Extra Time</span>
+                              ) : null}
+                              {defaultAA?.needsSeparateRoom ? (
+                                <span className="font-semibold">• Separate Room</span>
+                              ) : null}
+                              {defaultAA?.frontSeatMobility ? (
+                                <span className="font-semibold">• Front Row Seating</span>
+                              ) : null}
+                              {defaultAA?.remarks ? (
+                                <span className="italic">({defaultAA.remarks})</span>
+                              ) : null}
+                            </div>
+                          );
+                        })()}
+
+                        {/* Papers & Seat Schedule Table */}
+                        <div className="overflow-x-auto border border-slate-300 rounded-lg">
+                          <table className="w-full text-left text-xs border-collapse">
+                            <thead className="bg-slate-100 text-slate-800 font-bold border-b border-slate-300">
+                              <tr>
+                                <th className="px-3 py-2 border-r border-slate-300 w-32">Date</th>
+                                <th className="px-3 py-2 border-r border-slate-300 w-28">Exam Time</th>
+                                <th className="px-3 py-2 border-r border-slate-300 w-24">Code</th>
+                                <th className="px-3 py-2 border-r border-slate-300">Subject / Paper</th>
+                                <th className="px-3 py-2 border-r border-slate-300 w-36">Venue</th>
+                                <th className="px-3 py-2 w-20 text-center bg-indigo-50/70 text-indigo-950 font-black">Seat</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-200">
+                              {student.entries.length === 0 ? (
+                                <tr>
+                                  <td colSpan={6} className="px-4 py-4 text-center text-slate-400 italic">
+                                    No registered examination papers for this candidate.
+                                  </td>
+                                </tr>
+                              ) : (
+                                student.entries.map((entry, eIdx) => {
+                                  const dateFormatted = formatExamDate(entry.date);
+
+                                  return (
+                                    <tr key={eIdx} className="hover:bg-slate-50/70">
+                                      <td className="px-3 py-2 font-medium border-r border-slate-200 whitespace-nowrap">
+                                        {dateFormatted.dayOfWeek.slice(0, 3)}, {dateFormatted.formattedDate}
+                                      </td>
+                                      <td className="px-3 py-2 font-mono border-r border-slate-200 whitespace-nowrap">
+                                        <span className="font-semibold text-slate-900">{entry.startTime}</span>
+                                        <span className="text-slate-400"> – </span>
+                                        <span className="text-slate-600">{entry.endTime}</span>
+                                      </td>
+                                      <td className="px-3 py-2 font-mono font-bold text-slate-700 border-r border-slate-200">
+                                        {entry.paper.code}
+                                      </td>
+                                      <td className="px-3 py-2 font-medium text-slate-900 border-r border-slate-200">
+                                        <div className="flex items-center gap-1.5">
+                                          <span>{entry.paper.title}</span>
+                                          {entry.paper.requiresComputer && (
+                                            <span className="text-[9px] font-bold text-sky-700 bg-sky-100 border border-sky-200 px-1 py-0.2 rounded">
+                                              PC
+                                            </span>
+                                          )}
+                                        </div>
+                                      </td>
+                                      <td className="px-3 py-2 border-r border-slate-200 font-semibold text-slate-800">
+                                        {entry.venueName}
+                                      </td>
+                                      <td className="px-3 py-2 text-center bg-indigo-50/40">
+                                        <span className="font-mono font-black text-xs text-indigo-900 bg-white border border-indigo-200 px-2 py-0.5 rounded shadow-2xs">
+                                          {entry.seatLabel}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  );
+                                })
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        {/* Instructions & Declarations */}
+                        <div className="mt-3 pt-3 border-t border-slate-300 text-[10px] text-slate-600 space-y-1">
+                          <p className="font-semibold text-slate-800">
+                            Candidate Instructions & Regulations:
+                          </p>
+                          <p>
+                            1. Bring this Entry Proof and valid student identification (School Smartcard / EZ-Link / NRIC) to every examination session.
+                          </p>
+                          <p>
+                            2. Report to the assigned examination room at least <strong>30 minutes</strong> prior to the commencement of the paper.
+                          </p>
+                          <p>
+                            3. No unauthorized devices, electronic dictionaries, mobile phones, or smartwatches are permitted on examination desks.
+                          </p>
+                        </div>
+
+                        {/* Signatures */}
+                        <div className="mt-4 pt-3 border-t border-slate-200 grid grid-cols-3 gap-4 text-[10px] text-slate-700 page-break-inside-avoid">
+                          <div>
+                            <p className="font-semibold text-slate-800">Candidate's Signature</p>
+                            <p className="mt-4 border-b border-slate-400 w-full"></p>
+                          </div>
+                          <div>
+                            <p className="font-semibold text-slate-800">Parent / Guardian Acknowledgement</p>
+                            <p className="mt-4 border-b border-slate-400 w-full"></p>
+                          </div>
+                          <div className="text-right">
+                            <p className="font-semibold text-slate-800">Examination Committee / School Stamp</p>
+                            <p className="mt-4 border-b border-slate-400 w-full"></p>
+                          </div>
+                        </div>
+
+                        {/* Cutting line if 2-Up mode and odd item */}
+                        {entryProofLayout === '2_UP' && !isEven && studentIdx < entryProofStudents.length - 1 && (
+                          <div className="no-print mt-6 pt-2 border-t-2 border-dashed border-slate-400 text-center text-[10px] text-slate-400 select-none flex items-center justify-center gap-2">
+                            <Scissors className="w-3.5 h-3.5 text-slate-400" />
+                            <span>CUT HERE FOR 2-UP PRINT</span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </>
             )}

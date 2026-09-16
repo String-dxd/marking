@@ -1,3 +1,5 @@
+export type ExamScope = 'national' | 'internal';
+
 export type PaperType = 'STANDARD' | 'SCIENCE_LAB' | 'LISTENING_COMP' | 'ORAL';
 
 export interface AccessArrangement {
@@ -8,14 +10,18 @@ export interface AccessArrangement {
 }
 
 export interface Candidate {
-  id: string;                 // 4-digit Index Number (e.g. "0005" from "15550005"), IC discarded
-  indexNumber: string;        // 4-digit Index Number (e.g. "0005")
+  id: string;                 // 4-digit Index Number (SEAB) or unique class-reg id (Internal, e.g. "1 DILIGENCE-01")
+  indexNumber: string;        // 4-digit Index Number (e.g. "0005") or Register Number (e.g. "01")
   fullName: string;           // Statutory Name (e.g. "DENISSE VOO XIAO YOU")
-  academicLevel?: string;     // e.g. "SECONDARY 4"
-  classGroup?: string;        // e.g. "4E1", "4N2" (if enriched/parsed)
+  academicLevel?: string;     // e.g. "SECONDARY 4" or "SECONDARY 1"
+  classGroup?: string;        // e.g. "4E1", "1 DILIGENCE"
   schoolName?: string;        // e.g. "CANBERRA SECONDARY SCHOOL"
   examCentreCode?: string;    // e.g. "1555"
-  subjectCodes: string[];     // e.g. ["6127/01", "6091/01", "6091/03"]
+  subjectCodes: string[];     // e.g. ["6127/01", "6091/01"] or ["EL - G3", "Maths - G2"]
+  gender?: string;            // "F" or "M"
+  formTeacher?: string;       // Form Teacher name for internal school exams
+  teachingGroup?: string;     // e.g. "1J31_MARYAM"
+  stream?: string;            // e.g. "G1", "G2", "G3", "EXP", "NA", "NT"
   arrangements?: AccessArrangement; // Default fallback arrangement for all papers
   paperArrangements?: Record<string, AccessArrangement>; // Granular AA mapped by subject/paper code (e.g. "1128/01")
 }
@@ -47,16 +53,30 @@ export interface SeabRawCandidateRow {
   postedExamCentreCode: string;
 }
 
+export interface InternalRawMarkSheetRow {
+  regNo: number;
+  name: string;
+  sex: string;
+  formTeacher: string;
+  classGroup: string;
+  teachingGroup: string;
+  subjectName: string;
+}
+
 export interface ExamPaper {
   id: string;
-  code: string;               // e.g. "6127/01" or "6091/03"
-  title: string;              // e.g. "Art (Revised) Paper 1"
+  code: string;               // e.g. "6127/01" or "EL - G3/P1"
+  title: string;              // e.g. "Art (Revised) Paper 1" or "English Language P1"
   durationMins: number;
   type: PaperType;
   requiresComputer: boolean;  // true if paper requires PC terminals
-  allowCombine?: boolean;     // whether paper can share a venue with others on same day/slot (always false for LISTENING_COMP)
+  allowCombine?: boolean;     // whether paper can share a venue with others on same day/slot (default false, always false for LISTENING_COMP)
   date: string;               // YYYY-MM-DD
   startTime: string;          // HH:mm
+  level?: string;             // e.g. "Secondary 4", "Sec 1", "GCE O-Level", "JC 2", "Primary 6"
+  stream?: string;            // e.g. "G1", "G2", "G3", "All Streams"
+  baseSubjectCode?: string;   // e.g. "EL - G3"
+  venueType?: string;         // e.g. "Classrooms", "Computer Labs"
 }
 
 export interface VenueSeat {
