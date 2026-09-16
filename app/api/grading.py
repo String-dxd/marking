@@ -30,7 +30,8 @@ def save_grading_draft(submission_id: int, data: GradingReviewUpdate):
         
     questions_dict = [q.model_dump() for q in data.questions]
     computed_awarded = sum(q["awarded_marks"] for q in questions_dict)
-    max_marks = float(submission.get("assignment_max_marks") or 100.0)
+    q_max = sum(float(q.get("max_marks", 0.0)) for q in questions_dict if float(q.get("max_marks", 0.0)) > 0)
+    max_marks = q_max if q_max > 0 else float(submission.get("assignment_max_marks") or 100.0)
     pct = round((computed_awarded / max_marks * 100.0), 1) if max_marks > 0 else 0.0
     grade = compute_grade_letter(pct)
     
@@ -57,7 +58,8 @@ def approve_grading(submission_id: int, data: GradingReviewUpdate):
         
     questions_dict = [q.model_dump() for q in data.questions]
     computed_awarded = sum(q["awarded_marks"] for q in questions_dict)
-    max_marks = float(submission.get("assignment_max_marks") or 100.0)
+    q_max = sum(float(q.get("max_marks", 0.0)) for q in questions_dict if float(q.get("max_marks", 0.0)) > 0)
+    max_marks = q_max if q_max > 0 else float(submission.get("assignment_max_marks") or 100.0)
     pct = round((computed_awarded / max_marks * 100.0), 1) if max_marks > 0 else 0.0
     grade = compute_grade_letter(pct)
     

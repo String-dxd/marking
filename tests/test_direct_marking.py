@@ -217,3 +217,72 @@ def test_generate_direct_marking_pdf_with_auto_synthesize(tmp_path):
     assert len(doc) == 1
     doc.close()
 
+
+def test_direct_marking_pipeline_clears_marking_first(tmp_path):
+    # 1. Setup student, assignment, submission
+    s_id = db.get_or_create_student(student_id_code="STU-CLEAR-1", name="Luna Lovegood", class_name="General")
+    conn = db.get_db_connection()
+    c = conn.cursor()
+    c.execute("INSERT INTO assignments (title, subject, class_name, max_marks, marking_scheme_text) VALUES (?, ?, ?, ?, ?)",
+              ("Potions Test", "Chemistry", "General", 20.0, "Q1: 10 marks\nQ2: 10 marks"))
+    a_id = c.lastrowid
+    conn.commit()
+    conn.close()
+
+    img_path = str(tmp_path / "p_clear.jpg")
+    img = Image.new("RGB", (600, 800), color=(255, 255, 255))
+    img.save(img_path)
+
+    pages = [{"page_number": 1, "image_path": img_path}]
+    sub_id = db.create_submission(a_id, s_id, img_path, json.dumps(pages))
+
+    # Pre-populate stale annotations and student edits in DB
+    stale_anns = [
+        {"id": "stale_1", "page_number": 1, "type": "cross", "bbox_2d": [50, 50, 80, 200], "remark": "OLD STALE MARK"}
+    ]
+    stale_edits = [
+        {"id": "stale_edit_1", "type": "self_strikethrough", "page_number": 1}
+    ]
+    db.update_submission_annotations(sub_id, stale_anns)
+    db.update_submission_student_edits(sub_id, stale_edits)
+
+    assert len(db.get_submission_annotations(sub_id)) == 1
+    assert len(db.get_submission_student_edits(sub_id)) == 1
+
+    # Verify db.clear_submission_markings directly
+    db.clear_submission_markings(sub_id)
+    assert db.get_submission_annotations(sub_id) == []
+    assert db.get_submission_student_edits(sub_id) == []
+
+    # Re-insert stale marks
+    db.update_submission_annotations(sub_id, stale_anns)
+    db.update_submission_student_edits(sub_id, stale_edits)
+
+    # Save question grades for direct marking
+    q_grades = [
+        {
+            "question_no": "1",
+            "question_title": "Polyjuice Potion",
+            "max_marks": 10.0,
+            "awarded_marks": 10.0,
+            "extracted_answer": "Add fluxweed and knotgrass.",
+            "criteria": [],
+            "feedback_comment": "Excellent brewing step.",
+            "page_number": 1,
+            "bbox_2d": [200, 100, 250, 400]
+        }
+    ]
+    db.save_marking_results(sub_id, 10.0, 50.0, "C", "Good start", "", "", "test-model", q_grades)
+
+    # Trigger direct-mark endpoint: it must clear the old stale marks first and output fresh annotations
+    resp = client.post(f"/api/submissions/{sub_id}/direct-mark")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is True
+
+    # Stale mark with "OLD STALE MARK" should NOT be present
+    new_anns = data["annotations"]
+    assert len(new_anns) > 0
+    assert not any("OLD STALE MARK" in a.get("remark", "") for a in new_anns)
+    assert any("Polyjuice" in a.get("remark", "") or "10/10" in a.get("score", "") or a.get("type") == "tick" for a in new_anns)
+

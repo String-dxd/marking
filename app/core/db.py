@@ -47,9 +47,16 @@ def init_db():
         marking_scheme_text TEXT,
         marking_scheme_file TEXT,
         rubric_json TEXT, -- JSON structure of questions and criteria
+        marker_type TEXT DEFAULT 'auto',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
+    
+    # Check if marker_type column exists for existing database
+    cursor.execute("PRAGMA table_info(assignments)")
+    assign_cols = [row["name"] for row in cursor.fetchall()]
+    if "marker_type" not in assign_cols:
+        cursor.execute("ALTER TABLE assignments ADD COLUMN marker_type TEXT DEFAULT 'auto'")
     
     # Submissions Table
     cursor.execute("""
@@ -88,6 +95,7 @@ def init_db():
         feedback_comment TEXT,
         annotations_json TEXT DEFAULT '[]',
         page_number INTEGER DEFAULT 1,
+        bbox_json TEXT DEFAULT '[]',
         FOREIGN KEY (submission_id) REFERENCES submissions (id) ON DELETE CASCADE
     )
     """)
@@ -97,6 +105,8 @@ def init_db():
     sub_cols = [row["name"] for row in cursor.fetchall()]
     if "annotations_json" not in sub_cols:
         cursor.execute("ALTER TABLE submissions ADD COLUMN annotations_json TEXT DEFAULT '[]'")
+    if "student_edits_json" not in sub_cols:
+        cursor.execute("ALTER TABLE submissions ADD COLUMN student_edits_json TEXT DEFAULT '[]'")
 
     cursor.execute("PRAGMA table_info(question_grades)")
     qg_cols = [row["name"] for row in cursor.fetchall()]
@@ -104,6 +114,22 @@ def init_db():
         cursor.execute("ALTER TABLE question_grades ADD COLUMN annotations_json TEXT DEFAULT '[]'")
     if "page_number" not in qg_cols:
         cursor.execute("ALTER TABLE question_grades ADD COLUMN page_number INTEGER DEFAULT 1")
+    if "bbox_json" not in qg_cols:
+        cursor.execute("ALTER TABLE question_grades ADD COLUMN bbox_json TEXT DEFAULT '[]'")
+    
+    # Check and migrate Google Classroom integration columns
+    if "google_user_id" not in student_cols:
+        cursor.execute("ALTER TABLE students ADD COLUMN google_user_id TEXT DEFAULT ''")
+    
+    if "google_course_id" not in assign_cols:
+        cursor.execute("ALTER TABLE assignments ADD COLUMN google_course_id TEXT DEFAULT ''")
+    if "google_coursework_id" not in assign_cols:
+        cursor.execute("ALTER TABLE assignments ADD COLUMN google_coursework_id TEXT DEFAULT ''")
+        
+    if "google_submission_id" not in sub_cols:
+        cursor.execute("ALTER TABLE submissions ADD COLUMN google_submission_id TEXT DEFAULT ''")
+    if "google_released_at" not in sub_cols:
+        cursor.execute("ALTER TABLE submissions ADD COLUMN google_released_at TIMESTAMP")
     
     conn.commit()
     conn.close()
@@ -335,13 +361,22 @@ def bulk_import_roster(students_data: List[Dict[str, str]]) -> Dict[str, Any]:
         "students": imported_students
     }
 
-def create_assignment(title: str, subject: str, class_name: str, max_marks: float, marking_scheme_text: str, marking_scheme_file: str = "", rubric_json: str = "[]") -> int:
+def create_assignment(
+    title: str,
+    subject: str,
+    class_name: str,
+    max_marks: float,
+    marking_scheme_text: str,
+    marking_scheme_file: str = "",
+    rubric_json: str = "[]",
+    marker_type: str = "auto"
+) -> int:
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        """INSERT INTO assignments (title, subject, class_name, max_marks, marking_scheme_text, marking_scheme_file, rubric_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (title, subject, class_name, max_marks, marking_scheme_text, marking_scheme_file, rubric_json)
+        """INSERT INTO assignments (title, subject, class_name, max_marks, marking_scheme_text, marking_scheme_file, rubric_json, marker_type)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (title, subject, class_name, max_marks, marking_scheme_text, marking_scheme_file, rubric_json, marker_type or "auto")
     )
     conn.commit()
     a_id = cursor.lastrowid
@@ -373,20 +408,22 @@ def update_assignment(
     class_name: str,
     max_marks: float,
     marking_scheme_text: str,
-    rubric_json: str = "[]"
+    rubric_json: str = "[]",
+    marker_type: Optional[str] = "auto"
 ) -> Optional[Dict[str, Any]]:
     """Updates an existing assignment details and marking scheme."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    row = cursor.execute("SELECT id FROM assignments WHERE id = ?", (assignment_id,)).fetchone()
+    row = cursor.execute("SELECT id, marker_type FROM assignments WHERE id = ?", (assignment_id,)).fetchone()
     if not row:
         conn.close()
         return None
+    eff_marker = marker_type if marker_type is not None else (row["marker_type"] or "auto")
     cursor.execute("""
         UPDATE assignments
-        SET title = ?, subject = ?, class_name = ?, max_marks = ?, marking_scheme_text = ?, rubric_json = ?
+        SET title = ?, subject = ?, class_name = ?, max_marks = ?, marking_scheme_text = ?, rubric_json = ?, marker_type = ?
         WHERE id = ?
-    """, (title.strip(), subject.strip(), class_name.strip(), float(max_marks), marking_scheme_text.strip(), rubric_json.strip() if rubric_json else "[]", assignment_id))
+    """, (title.strip(), subject.strip(), class_name.strip(), float(max_marks), marking_scheme_text.strip(), rubric_json.strip() if rubric_json else "[]", eff_marker, assignment_id))
     conn.commit()
     updated = cursor.execute("SELECT * FROM assignments WHERE id = ?", (assignment_id,)).fetchone()
     conn.close()
@@ -432,7 +469,7 @@ def create_submission(assignment_id: int, student_id: int, scan_file_path: str, 
     conn.close()
     return sub_id
 
-def find_matching_student(name: str, student_code: str = "") -> Optional[Dict[str, Any]]:
+def find_matching_student(name: str, student_code: str = "", class_name: str = "") -> Optional[Dict[str, Any]]:
     conn = get_db_connection()
     clean_name = name.strip().lower() if name else ""
     clean_code = student_code.strip().lower() if student_code else ""
@@ -446,15 +483,39 @@ def find_matching_student(name: str, student_code: str = "") -> Optional[Dict[st
     if not row and clean_name and clean_name not in generic_names and not clean_name.startswith("student script") and not clean_name.startswith("student "):
         row = conn.execute("SELECT * FROM students WHERE LOWER(name) = ?", (clean_name,)).fetchone()
         
+        # Dynamic fuzzy matching against existing students (scoped to class if available)
+        if not row:
+            import difflib
+            candidates = []
+            if class_name:
+                candidates = conn.execute("SELECT * FROM students WHERE LOWER(class_name) = ?", (class_name.strip().lower(),)).fetchall()
+            if not candidates:
+                candidates = conn.execute("SELECT * FROM students").fetchall()
+                
+            best_cand = None
+            best_ratio = 0.0
+            for c in candidates:
+                cand_name = c["name"].strip().lower()
+                if cand_name in generic_names or cand_name.startswith("student ") or cand_name.startswith("script"):
+                    continue
+                ratio = difflib.SequenceMatcher(None, clean_name, cand_name).ratio()
+                if ratio > best_ratio and ratio >= 0.80:
+                    best_ratio = ratio
+                    best_cand = c
+            if best_cand:
+                row = best_cand
+        
     conn.close()
     return dict(row) if row else None
 
 def get_submission_by_id(submission_id: int) -> Optional[Dict[str, Any]]:
     conn = get_db_connection()
     row = conn.execute("""
-        SELECT s.*, st.name as student_name, st.student_id as student_code, st.class_name,
+        SELECT s.*, st.name as student_name, st.student_id as student_code, st.class_name, st.email as student_email,
+               st.google_user_id as student_google_user_id,
                a.title as assignment_title, a.subject as assignment_subject, a.max_marks as assignment_max_marks,
-               a.rubric_json as assignment_rubric_json, a.marking_scheme_text,
+               a.rubric_json as assignment_rubric_json, a.marking_scheme_text, a.marker_type as assignment_marker_type,
+               a.google_course_id, a.google_coursework_id,
                (SELECT COUNT(*) FROM submissions sub WHERE sub.student_id = st.id AND sub.id != s.id) as previous_submissions_count
         FROM submissions s
         JOIN students st ON s.student_id = st.id
@@ -476,6 +537,13 @@ def get_submission_by_id(submission_id: int) -> Optional[Dict[str, Any]]:
     except Exception:
         res["annotations"] = []
     
+    # Parse student edits list
+    try:
+        raw_edits = res.get("student_edits_json")
+        res["student_edits"] = json.loads(raw_edits) if raw_edits else []
+    except Exception:
+        res["student_edits"] = []
+    
     # Fetch question grades
     conn = get_db_connection()
     q_rows = conn.execute("SELECT * FROM question_grades WHERE submission_id = ? ORDER BY id ASC", (submission_id,)).fetchall()
@@ -492,9 +560,24 @@ def get_submission_by_id(submission_id: int) -> Optional[Dict[str, Any]]:
             qd["annotations"] = json.loads(qd.get("annotations_json") or "[]")
         except Exception:
             qd["annotations"] = []
+        try:
+            qd["bbox_2d"] = json.loads(qd.get("bbox_json") or "[]")
+        except Exception:
+            qd["bbox_2d"] = None
         parsed_q_grades.append(qd)
         
     res["question_grades"] = parsed_q_grades
+
+    # Calculate 3-step pipeline completion flags
+    has_extracted = len(parsed_q_grades) > 0 and any(bool((q.get("extracted_answer") or "").strip()) for q in parsed_q_grades)
+    has_feedback = bool((res.get("overall_feedback") or "").strip() and res.get("grade_letter", "--") != "--")
+    has_annotations = bool(len(res.get("annotations", [])) > 0)
+
+    res["step1_done"] = has_extracted
+    res["step2_done"] = has_feedback
+    res["step3_done"] = has_annotations
+    res["is_pipeline_complete"] = has_extracted and has_feedback and has_annotations
+
     return res
 
 def update_submission_annotations(submission_id: int, annotations: List[Dict[str, Any]]) -> bool:
@@ -503,6 +586,29 @@ def update_submission_annotations(submission_id: int, annotations: List[Dict[str
     cursor = conn.cursor()
     ann_json = json.dumps(annotations) if isinstance(annotations, list) else str(annotations)
     cursor.execute("UPDATE submissions SET annotations_json = ? WHERE id = ?", (ann_json, submission_id))
+    conn.commit()
+    conn.close()
+    return True
+
+def clear_submission_markings(submission_id: int) -> bool:
+    """Clears all direct visual markings and student self-edits for a submission."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE submissions 
+        SET annotations_json = '[]', student_edits_json = '[]'
+        WHERE id = ?
+    """, (submission_id,))
+    conn.commit()
+    conn.close()
+    return True
+
+def update_submission_pages(submission_id: int, pages: List[Dict[str, Any]]) -> bool:
+    """Updates the pages_json for a submission, preserving page lines and extracted text."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    pages_json = json.dumps(pages) if isinstance(pages, list) else str(pages)
+    cursor.execute("UPDATE submissions SET pages_json = ? WHERE id = ?", (pages_json, submission_id))
     conn.commit()
     conn.close()
     return True
@@ -519,11 +625,36 @@ def get_submission_annotations(submission_id: int) -> List[Dict[str, Any]]:
     except Exception:
         return []
 
+def update_submission_student_edits(submission_id: int, student_edits: List[Dict[str, Any]]) -> bool:
+    """Updates the catalog of student self-edits for a submission."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    edits_json = json.dumps(student_edits) if isinstance(student_edits, list) else str(student_edits)
+    cursor.execute("UPDATE submissions SET student_edits_json = ? WHERE id = ?", (edits_json, submission_id))
+    conn.commit()
+    conn.close()
+    return True
+
+def get_submission_student_edits(submission_id: int) -> List[Dict[str, Any]]:
+    """Retrieves the catalog of student self-edits for a submission."""
+    conn = get_db_connection()
+    row = conn.execute("SELECT student_edits_json FROM submissions WHERE id = ?", (submission_id,)).fetchone()
+    conn.close()
+    if not row or not row["student_edits_json"]:
+        return []
+    try:
+        return json.loads(row["student_edits_json"])
+    except Exception:
+        return []
+
 def get_submissions_by_assignment(assignment_id: int) -> List[Dict[str, Any]]:
     conn = get_db_connection()
     rows = conn.execute("""
         SELECT s.*, st.name as student_name, st.student_id as student_code, st.class_name,
-               (SELECT COUNT(*) FROM submissions sub WHERE sub.student_id = st.id AND sub.id != s.id) as previous_submissions_count
+               (SELECT COUNT(*) FROM submissions sub WHERE sub.student_id = st.id AND sub.id != s.id) as previous_submissions_count,
+               ((SELECT COUNT(*) FROM question_grades qg WHERE qg.submission_id = s.id AND qg.extracted_answer IS NOT NULL AND TRIM(qg.extracted_answer) != '') > 0) as step1_done,
+               (s.overall_feedback IS NOT NULL AND TRIM(s.overall_feedback) != '' AND s.grade_letter IS NOT NULL AND s.grade_letter != '--') as step2_done,
+               (s.annotations_json IS NOT NULL AND LENGTH(TRIM(s.annotations_json)) > 2 AND s.annotations_json != '[]') as step3_done
         FROM submissions s
         JOIN students st ON s.student_id = st.id
         WHERE s.assignment_id = ?
@@ -535,6 +666,10 @@ def get_submissions_by_assignment(assignment_id: int) -> List[Dict[str, Any]]:
     for r in rows:
         d = dict(r)
         d["is_existing_student"] = (d.get("previous_submissions_count", 0) > 0)
+        d["step1_done"] = bool(d.get("step1_done"))
+        d["step2_done"] = bool(d.get("step2_done"))
+        d["step3_done"] = bool(d.get("step3_done"))
+        d["is_pipeline_complete"] = d["step1_done"] and d["step2_done"] and d["step3_done"]
         result.append(d)
     return result
 
@@ -605,6 +740,15 @@ def save_marking_results(submission_id: int, total_score: float, percentage: flo
                          ai_model: str, questions: List[Dict[str, Any]], auto_status: str = 'review_ready'):
     conn = get_db_connection()
     cursor = conn.cursor()
+
+    # Dynamically sync assignment max_marks from questions if different
+    sum_max = sum(float(q.get("max_marks", 0.0)) for q in questions if float(q.get("max_marks", 0.0)) > 0)
+    if sum_max > 0:
+        sub_row = cursor.execute("SELECT assignment_id FROM submissions WHERE id = ?", (submission_id,)).fetchone()
+        if sub_row:
+            asgn_id = sub_row[0]
+            cursor.execute("UPDATE assignments SET max_marks = ? WHERE id = ? AND abs(max_marks - ?) > 0.01", (sum_max, asgn_id, sum_max))
+
     cursor.execute("""
         UPDATE submissions 
         SET total_score = ?, percentage = ?, grade_letter = ?, overall_feedback = ?,
@@ -617,10 +761,11 @@ def save_marking_results(submission_id: int, total_score: float, percentage: flo
     
     for q in questions:
         criteria_json = json.dumps(q.get("criteria", [])) if isinstance(q.get("criteria"), (list, dict)) else str(q.get("criteria", ""))
+        bbox_json = json.dumps(q.get("bbox_2d") or []) if q.get("bbox_2d") else "[]"
         p_num = int(q.get("page_number", 1) or 1)
         cursor.execute("""
-            INSERT INTO question_grades (submission_id, question_no, question_title, max_marks, awarded_marks, extracted_answer, criteria_breakdown_json, feedback_comment, page_number)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO question_grades (submission_id, question_no, question_title, max_marks, awarded_marks, extracted_answer, criteria_breakdown_json, feedback_comment, page_number, bbox_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             submission_id,
             str(q.get("question_no", "")),
@@ -630,7 +775,8 @@ def save_marking_results(submission_id: int, total_score: float, percentage: flo
             str(q.get("extracted_answer", "")),
             criteria_json,
             str(q.get("feedback_comment", "")),
-            p_num
+            p_num,
+            bbox_json
         ))
     conn.commit()
     conn.close()
@@ -641,6 +787,14 @@ def approve_submission(submission_id: int, total_score: float, percentage: float
     conn = get_db_connection()
     cursor = conn.cursor()
     now = datetime.now().isoformat()
+
+    sum_max = sum(float(q.get("max_marks", 0.0)) for q in questions if float(q.get("max_marks", 0.0)) > 0)
+    if sum_max > 0:
+        sub_row = cursor.execute("SELECT assignment_id FROM submissions WHERE id = ?", (submission_id,)).fetchone()
+        if sub_row:
+            asgn_id = sub_row[0]
+            cursor.execute("UPDATE assignments SET max_marks = ? WHERE id = ? AND abs(max_marks - ?) > 0.01", (sum_max, asgn_id, sum_max))
+
     cursor.execute("""
         UPDATE submissions 
         SET total_score = ?, percentage = ?, grade_letter = ?, overall_feedback = ?,
@@ -651,10 +805,11 @@ def approve_submission(submission_id: int, total_score: float, percentage: float
     cursor.execute("DELETE FROM question_grades WHERE submission_id = ?", (submission_id,))
     for q in questions:
         criteria_json = json.dumps(q.get("criteria", [])) if isinstance(q.get("criteria"), (list, dict)) else str(q.get("criteria", ""))
+        bbox_json = json.dumps(q.get("bbox_2d") or []) if q.get("bbox_2d") else "[]"
         p_num = int(q.get("page_number", 1) or 1)
         cursor.execute("""
-            INSERT INTO question_grades (submission_id, question_no, question_title, max_marks, awarded_marks, extracted_answer, criteria_breakdown_json, feedback_comment, page_number)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO question_grades (submission_id, question_no, question_title, max_marks, awarded_marks, extracted_answer, criteria_breakdown_json, feedback_comment, page_number, bbox_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             submission_id,
             str(q.get("question_no", "")),
@@ -664,7 +819,8 @@ def approve_submission(submission_id: int, total_score: float, percentage: float
             str(q.get("extracted_answer", "")),
             criteria_json,
             str(q.get("feedback_comment", "")),
-            p_num
+            p_num,
+            bbox_json
         ))
     conn.commit()
     conn.close()
@@ -724,3 +880,50 @@ def get_class_analytics(class_name: Optional[str] = None) -> Dict[str, Any]:
     return {
         "approved_submissions": [dict(r) for r in rows]
     }
+
+def update_student_google_id(student_id: int, google_user_id: str):
+    """Associates a student with their Google Classroom user ID."""
+    conn = get_db_connection()
+    conn.execute("UPDATE students SET google_user_id = ? WHERE id = ?", (google_user_id.strip(), student_id))
+    conn.commit()
+    conn.close()
+
+def get_student_by_google_id(google_user_id: str) -> Optional[Dict[str, Any]]:
+    """Finds a student by their Google Classroom user ID."""
+    if not google_user_id:
+        return None
+    conn = get_db_connection()
+    row = conn.execute("SELECT * FROM students WHERE google_user_id = ?", (google_user_id.strip(),)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+def get_student_by_email(email: str) -> Optional[Dict[str, Any]]:
+    """Finds a student by their email address."""
+    if not email:
+        return None
+    conn = get_db_connection()
+    row = conn.execute("SELECT * FROM students WHERE LOWER(TRIM(email)) = LOWER(TRIM(?))", (email.strip(),)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+def update_assignment_google_coursework(assignment_id: int, google_course_id: str, google_coursework_id: str):
+    """Associates a Tallus assignment with a Google Classroom course and coursework item."""
+    conn = get_db_connection()
+    conn.execute(
+        "UPDATE assignments SET google_course_id = ?, google_coursework_id = ? WHERE id = ?",
+        (google_course_id.strip(), google_coursework_id.strip(), assignment_id)
+    )
+    conn.commit()
+    conn.close()
+
+def update_submission_google_release(submission_id: int, google_sub_id: str, released_at: Optional[str] = None):
+    """Updates a submission's Google Classroom release metadata."""
+    if not released_at:
+        released_at = datetime.now().isoformat()
+    conn = get_db_connection()
+    conn.execute(
+        "UPDATE submissions SET google_submission_id = ?, google_released_at = ? WHERE id = ?",
+        (google_sub_id.strip(), released_at, submission_id)
+    )
+    conn.commit()
+    conn.close()

@@ -1,5 +1,7 @@
 @echo off
-title Tallus - Local AI Marking & Feedback System
-echo Starting Tallus...
-python run.py
-pause
+cd /d "%~dp0"
+if exist "tallus.exe" (
+    start "" "tallus.exe" %*
+    exit
+)
+start "" ".venv\Scripts\pythonw.exe" "tallus_desktop.py" %*

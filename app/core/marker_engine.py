@@ -5,6 +5,7 @@ from typing import List, Dict, Any, Optional
 from app.core.ollama_client import ollama_client
 from app.core.pdf_processor import get_page_base64
 from app.core.config import DEFAULT_VISION_MODEL, DEFAULT_TEXT_MODEL, DEFAULT_OCR_NUM_CTX, DEFAULT_GRADING_NUM_CTX
+from app.core.fallback_tracker import record_fallback
 
 def clean_and_parse_json(raw_text: str) -> Optional[Any]:
     """Robustly extracts and parses JSON (dict or list) from model responses."""
@@ -98,6 +99,12 @@ def parse_marked_questions_fallback(raw_content: str, original_questions: List[D
     Fallback parser when standard JSON parsing fails on model output.
     Extracts question grades, awarded marks, criteria, and feedback comments using regex.
     """
+    record_fallback(
+        source="JSON Parser",
+        trigger="Grading model response was not valid JSON",
+        action="Applied regex and heuristic section matching fallback",
+        details=f"Extracted grades for {len(original_questions or [])} questions via regex fallback"
+    )
     if not raw_content or not original_questions:
         return [dict(q) for q in (original_questions or [])]
 
@@ -119,6 +126,7 @@ def parse_marked_questions_fallback(raw_content: str, original_questions: List[D
             if q_num in item_map:
                 matched = item_map[q_num]
                 res.append({
+                    **orig,
                     "question_no": orig.get("question_no"),
                     "question_title": matched.get("question_title") or orig.get("question_title", f"Question {orig.get('question_no')}"),
                     "max_marks": float(matched.get("max_marks", orig.get("max_marks", 1.0))),
@@ -161,6 +169,7 @@ def parse_marked_questions_fallback(raw_content: str, original_questions: List[D
                 feedback = fb_match.group(1).strip()
 
         res.append({
+            **orig,
             "question_no": orig.get("question_no"),
             "question_title": orig.get("question_title", f"Question {q_num}"),
             "max_marks": q_max,
@@ -204,10 +213,12 @@ TABULAR DATA & GRAPH EVALUATION PROTOCOLS:
    - Structured Parse Format:
      [Graph: X-axis="<Label & Unit>" (Scale: <Range>), Y-axis="<Label & Unit>" (Scale: <Range>), Plotted Points: [(x1, y1), (x2, y2), ...] (Total N points), Line: "<Detailed description: CAREFULLY TRACE the line between each point. If the slope changes (dot-to-dot), state 'straight line segments connecting subsequent points'. Otherwise state if it's a best fit line, ONE straight line through all points, or a smooth curve. Explicitly note if drawn with a ruler, if smooth, if branched/hairy (sketched), and if it passes through origin (0,0)>", Gradient: "<Triangle coordinates & slope calculation>"]
    - Marking Scheme Alignment (Standard 4 Criteria):
-     1. Axes & Scale: Correct quantity labels, units, and uniform linear scale covering >=50% of grid.
-     2. Plotting Accuracy: Point-by-point coordinate comparison with ±0.5 small square allowable tolerance.
-     3. Line/Curve Quality: Must explicitly evaluate if it matches the required type (e.g., best fit line, ONE straight line through all points, straight line segments connecting subsequent points, or a smooth curve). Note if straight lines were drawn with a ruler, if curves are smooth, if lines are branched/"hairy" (sketched), and if the line passes through origin (0,0).
-     4. Gradient / Intercept Calculation: Correct coordinate substitution from drawn line, large triangle (>50%), correct units.
+      1. Axes & Scale: Correct quantity labels, units, and uniform linear scale covering >=50% of grid.
+      2. Plotting Accuracy: Point-by-point coordinate comparison with ±0.5 small square allowable tolerance.
+      3. Line/Curve Quality: Must explicitly evaluate if it matches the required type (e.g., best fit line, ONE straight line through all points, straight line segments connecting subsequent points, or a smooth curve). Note if straight lines were drawn with a ruler, if curves are smooth, if lines are branched/"hairy" (sketched), and if the line passes through origin (0,0).
+         * STRICT RULER REQUIREMENT: In science exams, a "best fit straight line" STRICTLY REQUIRES a single, ruler-drawn straight line.
+         * If the line is hand drawn, freehand, wavy, curved, sagging between points, or drawn without a ruler connecting dot-to-dot, CANNOT BE AWARDED THE LINE MARK (award 0 marks for this criterion)! State: "✗ Error: Line is hand drawn / freehand without a ruler, not a best-fit straight line. Expected: Ruler-drawn straight line of best fit."
+      4. Gradient / Intercept Calculation: Correct coordinate substitution from drawn line, large triangle (>50%), correct units.
    - If a graph error occurs, state the exact component:
      "✗ Error: Plotted point at x=<X> is (<X>, <Y_Student>) instead of (<X>, <Y_Expected>). Expected: (<X>, <Y_Expected>)."
      "✗ Error: Non-linear axis scale between <A> and <B>. Expected: Uniform linear interval."
@@ -219,11 +230,15 @@ CRITICAL EXTRACTION & SPATIAL BOUNDING RULES:
 2. TABULAR DATA EXTRACTION:
    - For student-completed tables, extract filled-in cells row-by-row into:
      [Table: Header=["<Col 1>", "<Col 2>", ...], Rows=[["<Val 1>", "<Val 2>", ...], ...]]
-   - Preserve headers, units, and all filled row entries.
+   - Preserve headers, units, and all filled row entries across all columns.
 3. GRAPH WORK EXTRACTION:
    - Read actual handwritten axis numbers directly from the grid (DO NOT copy printed prompt tables).
+   - STRICT RULER VS HAND-DRAWN INSPECTION:
+     * Zoom in and trace the drawn line between each data point.
+     * If the line is wavy, curved, sagging between points, or drawn freehand without a ruler, you MUST explicitly state: 'Hand-drawn freehand line without a ruler (NOT drawn with a ruler); curved/wobbly between points, not a straight line'.
+     * ONLY describe as 'drawn with a ruler' if it is a single, mathematically straight ruler-drawn line with zero wobbles or curvature throughout.
    - Transcribe:
-     [Graph: X-axis="<Label & Unit>" (Scale: <Range>), Y-axis="<Label & Unit>" (Scale: <Range>), Plotted Points: [(x1, y1), (x2, y2), ...] (Total N points), Line: "<Detailed description: CAREFULLY TRACE the line between each point. If the slope changes (dot-to-dot), state 'straight line segments connecting subsequent points'. Otherwise state if it's a best fit line, ONE straight line through all points, or a smooth curve. Explicitly note if drawn with a ruler, if smooth, if branched/hairy (sketched), and if it passes through origin (0,0)>", Gradient: "<Triangle coordinates & calculation>"]
+     [Graph: X-axis="<Label & Unit>" (Scale: <Range>), Y-axis="<Label & Unit>" (Scale: <Range>), Plotted Points: [(x1, y1), (x2, y2), ...] (Total N points), Line: "<Detailed description: CAREFULLY TRACE the line between each point. Explicitly note if drawn with a ruler or hand-drawn freehand, if straight or curved/wobbly, and if it passes through origin (0,0)>", Gradient: "<Triangle coordinates & calculation>"]
 4. FILL-IN-THE-BLANKS & MEASUREMENTS:
    - Transcribe the exact handwritten value and unit written in answer spaces.
 5. DIAGRAMS & CALLOUT TRACEBACK:
@@ -233,7 +248,9 @@ CRITICAL EXTRACTION & SPATIAL BOUNDING RULES:
 """
 
 def parse_questions_from_ocr_text(content: str, page_num: int = 1) -> List[Dict[str, Any]]:
-    """Robustly parses question items from JSON, markdown lines, bullet points, or unstructured text."""
+    """Robustly parses question items from JSON, markdown lines, bullet points, or unstructured text, capturing spatial bbox_2d."""
+    from app.core.direct_marker import normalize_bbox
+
     if not content or not content.strip():
         return []
         
@@ -246,24 +263,58 @@ def parse_questions_from_ocr_text(content: str, page_num: int = 1) -> List[Dict[
 
     def _clean_q_num(s: str) -> str:
         s = s.strip("*#:.- \t")
+        # Standalone letter subpart like 'c', 'c)', 'c.', 'c:' -> '(c)'
+        if re.match(r"^[a-z]$", s, re.IGNORECASE):
+            return f"({s.lower()})"
+        if re.match(r"^[a-z][\)\:\.]$", s, re.IGNORECASE):
+            return f"({s[0].lower()})"
+        # Roman numeral subparts like 'i)', 'ii)', 'i.', 'i:' -> '(i)'
+        if re.match(r"^(?:i|ii|iii|iv|v|vi|vii|viii|ix|x)[\)\:\.]$", s, re.IGNORECASE):
+            return f"({s[:-1].lower()})"
         if s.count("(") > s.count(")"):
             s = s + ")"
+        # Normalize '5a' -> '5(a)'
+        m_num_letter = re.match(r"^([0-9]+)([a-z])$", s, re.IGNORECASE)
+        if m_num_letter:
+            return f"{m_num_letter.group(1)}({m_num_letter.group(2).lower()})"
         return s
         
     # 1. Try JSON parsing
     parsed = clean_and_parse_json(content)
     if parsed and isinstance(parsed, dict) and "questions" in parsed and isinstance(parsed["questions"], list):
         res = []
-        for q in parsed["questions"]:
+        for idx, q in enumerate(parsed["questions"]):
             q["extracted_answer"] = _clean_ans(str(q.get("extracted_answer", "")))
+            raw_box = q.get("bbox_2d") or q.get("bbox") or q.get("box_2d")
+            norm_box = normalize_bbox(raw_box) if raw_box else None
+            q["page_number"] = int(q.get("page_number", page_num) or page_num)
+            q["bbox_2d"] = norm_box
+            q_num_raw = str(q.get("question_no", f"{idx+1}"))
+            q["question_no"] = _clean_q_num(q_num_raw)
+            if not q.get("question_title"):
+                q["question_title"] = f"Question {q['question_no']}"
             res.append(q)
         if res:
+            total_q = max(1, len(res))
+            slot_h = min(220, max(75, int(680 / total_q)))
+            for idx, q in enumerate(res):
+                raw_b = q.get("bbox_2d")
+                is_header_collide = raw_b and raw_b[0] < 160 and raw_b[2] < 200 and (total_q > 1 or "blank" in str(q.get("extracted_answer", "")).lower())
+                if not raw_b or is_header_collide:
+                    base_y = min(880, 240 + (idx * slot_h))
+                    q["bbox_2d"] = [base_y, 120, min(960, base_y + max(40, int(slot_h * 0.45))), 860]
             return res
         
     # 2. Universal line matching (supports markdown bolding, bullets, hashes, etc.)
-    # Matches: **Question 2(a)**:, - Question 1(b):, 3a. 15 s, ### Q4:, (a) Blue, etc.
+    # Matches:
+    #   - Prefixed by Question/Q/Part: 'Question 5(a):', 'Question (c):', 'Question c:', 'Part c:', 'Q5'
+    #   - Bare question numbers / subparts: '5(a):', '5(a) ...', '5a. ...', '(c) ...', '(c): ...', 'c) ...', 'c. ...', 'c: ...', '(i) ...'
     q_header_pattern = re.compile(
-        r"^(?:[\*\#\-\•\>\s]*)(?:(?:Question|Q|Part)\s*)?([0-9]+[a-z]?(?:\([a-z0-9ivx]+\))*|\([a-z0-9ivx]+\)|[0-9]+)\s*(?:[\*\:\：\.\-\)]+)\s*(.*)",
+        r"^(?:[\*\#\-\•\>\s]*)(?:"
+        r"(?:(?:Question|Q|Part)\s+)([0-9]+[a-z]?(?:\([a-z0-9ivx]+\))*|\([a-z0-9ivx]+\)(?:\([a-z0-9ivx]+\))*|[a-z](?:\([a-z0-9ivx]+\))*|[0-9]+|[a-z])"
+        r"|"
+        r"([0-9]+[a-z]?(?:\([a-z0-9ivx]+\))+|[0-9]+[a-z]|\([a-z0-9ivx]+\)(?:\([a-z0-9ivx]+\))*|\([a-z0-9ivx]+\)|[a-z]\)|[a-z]\.|[a-z]\:|[0-9]+)"
+        r")\s*(?:[\*\:\：\.\-\)]*)\s*(.*)",
         re.IGNORECASE
     )
     
@@ -281,18 +332,30 @@ def parse_questions_from_ocr_text(content: str, page_num: int = 1) -> List[Dict[
             if cur_q:
                 cur_q["extracted_answer"] = _clean_ans(cur_q["extracted_answer"])
                 questions.append(cur_q)
-            raw_q_num = m.group(1)
-            ans = m.group(2).strip()
+            raw_q_num = m.group(1) or m.group(2)
+            ans = m.group(3).strip()
+            # Extract optional inline bbox tag e.g. [bbox: 200, 100, 250, 600]
+            extracted_box = None
+            m_box = re.search(r"\[(?:bbox|box|coords?|bbox_2d)\s*:\s*([0-9]+)\s*,\s*([0-9]+)\s*,\s*([0-9]+)\s*,\s*([0-9]+)\]", ans, re.IGNORECASE)
+            if m_box:
+                extracted_box = normalize_bbox([int(m_box.group(1)), int(m_box.group(2)), int(m_box.group(3)), int(m_box.group(4))])
+                ans = re.sub(r"\[(?:bbox|box|coords?|bbox_2d)\s*:\s*[0-9]+\s*,\s*[0-9]+\s*,\s*[0-9]+\s*,\s*[0-9]+\]", "", ans).strip()
             # Remove any trailing bold asterisks from answer text
             ans = re.sub(r"^\*+\s*", "", ans).strip()
             q_num = _clean_q_num(raw_q_num)
             cur_q = {
                 "question_no": q_num,
                 "question_title": f"Question {q_num}",
-                "extracted_answer": ans
+                "extracted_answer": ans,
+                "page_number": page_num,
+                "bbox_2d": extracted_box
             }
         elif cur_q:
             cur_q["extracted_answer"] += " " + line_s
+            if not cur_q.get("bbox_2d"):
+                m_box = re.search(r"\[(?:bbox|box|coords?|bbox_2d)\s*:\s*([0-9]+)\s*,\s*([0-9]+)\s*,\s*([0-9]+)\s*,\s*([0-9]+)\]", line_s, re.IGNORECASE)
+                if m_box:
+                    cur_q["bbox_2d"] = normalize_bbox([int(m_box.group(1)), int(m_box.group(2)), int(m_box.group(3)), int(m_box.group(4))])
             
     if cur_q:
         cur_q["extracted_answer"] = _clean_ans(cur_q["extracted_answer"])
@@ -300,17 +363,112 @@ def parse_questions_from_ocr_text(content: str, page_num: int = 1) -> List[Dict[
         
     # 3. Fallback: If page has content but no question pattern matched (e.g. standalone graph, table, or calculation)
     if not questions and content.strip():
+        record_fallback(
+            source="OCR Question Extraction",
+            trigger=f"No question headers detected on Page {page_num}",
+            action=f"Aggregated page handwriting under container 'Page {page_num}'",
+            details=f"Text length: {len(content.strip())} chars"
+        )
         questions.append({
             "question_no": f"Page {page_num}",
             "question_title": f"Page {page_num} Workings & Responses",
-            "extracted_answer": _clean_ans(content.strip())
+            "extracted_answer": _clean_ans(content.strip()),
+            "page_number": page_num,
+            "bbox_2d": [180, 100, 850, 900]
         })
         
+    # Ensure every question has valid bbox_2d and page_number
+    total_q = max(1, len(questions))
+    slot_h = min(220, max(75, int(680 / total_q)))
+    for idx, q in enumerate(questions):
+        q["page_number"] = int(q.get("page_number", page_num) or page_num)
+        raw_b = q.get("bbox_2d")
+        is_header_collide = raw_b and raw_b[0] < 160 and raw_b[2] < 200 and (total_q > 1 or "blank" in str(q.get("extracted_answer", "")).lower())
+        if not raw_b or is_header_collide:
+            base_y = min(880, 240 + (idx * slot_h))
+            q["bbox_2d"] = [base_y, 120, min(960, base_y + max(40, int(slot_h * 0.45))), 860]
+
+    return questions
+
+def resolve_question_continuity_across_pages(
+    questions: List[Dict[str, Any]],
+    marking_scheme_text: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Resolves multi-page question flow where question parts continue across pages
+    without repeating the question header (e.g., Q5(a) and Q5(b) on page 6, followed
+    by (c) and (d) on page 7 without a Q5 header).
+
+    Links isolated subparts '(c)', '(d)', '(i)', etc. to their active parent question
+    established on preceding pages ('5' -> '5(c)', '5(d)').
+
+    Also cross-references the rubric marking scheme (if available) to sync official
+    question titles and maximum marks.
+    """
+    if not questions:
+        return []
+
+    # 1. Build marking scheme lookup maps if available
+    ms_map: Dict[str, Dict[str, Any]] = {}
+    if marking_scheme_text:
+        ms_list = parse_marking_scheme_structure(marking_scheme_text)
+        for msq in ms_list:
+            raw_no = str(msq.get("question_no", "")).strip()
+            clean_k = re.sub(r"[\(\)\s]", "", raw_no).lower()
+            ms_map[clean_k] = msq
+            ms_map[raw_no.lower()] = msq
+
+    active_parent_num: Optional[str] = None
+    active_subpart: Optional[str] = None
+
+    for q in questions:
+        q_no = str(q.get("question_no", "")).strip()
+
+        # Identify isolated subpart patterns:
+        # e.g. '(i)', '(ii)', '(iii)' (checked before single letters since 'i', 'v', 'x' are letters)
+        is_roman_subpart = re.match(r"^\((?:i|ii|iii|iv|v|vi|vii|viii|ix|x)\)$", q_no, re.IGNORECASE)
+        # e.g. '(c)', '(c)(i)', '(d)'
+        is_letter_subpart = re.match(r"^\(([a-z])\)(?:\(([a-z0-9ivx]+)\))?$", q_no, re.IGNORECASE)
+
+        if is_roman_subpart:
+            # If preceding question was a letter subpart e.g. '4(b)', nest roman numeral e.g. '4(b)(i)'
+            if active_subpart and re.search(r"\([a-z]\)$", active_subpart, re.IGNORECASE):
+                resolved = f"{active_subpart}{q_no}"
+            elif active_subpart and ms_map and re.sub(r"[\(\)\s]", "", f"{active_subpart}{q_no}").lower() in ms_map:
+                resolved = f"{active_subpart}{q_no}"
+            elif active_parent_num:
+                resolved = f"{active_parent_num}{q_no}"
+            else:
+                resolved = q_no
+            q["question_no"] = resolved
+            q["question_title"] = f"Question {resolved}"
+        elif is_letter_subpart and active_parent_num:
+            resolved = f"{active_parent_num}{q_no}"
+            q["question_no"] = resolved
+            q["question_title"] = f"Question {resolved}"
+            active_subpart = resolved
+        else:
+            # Full question pattern: extract parent question number e.g. '5' from '5(a)', '5b', '5', 'Q5'
+            m_parent = re.match(r"^(?:Question|Q|Part)?\s*([0-9]+)", q_no, re.IGNORECASE)
+            if m_parent:
+                active_parent_num = m_parent.group(1)
+                active_subpart = q_no
+
+        # 2. Enrich with marking scheme metadata if matched
+        final_q_no = str(q.get("question_no", "")).strip()
+        clean_key = re.sub(r"[\(\)\s]", "", final_q_no).lower()
+        ms_entry = ms_map.get(final_q_no.lower()) or ms_map.get(clean_key)
+        if ms_entry:
+            q["max_marks"] = float(ms_entry.get("max_marks", q.get("max_marks", 1.0)))
+            if ms_entry.get("question_title"):
+                q["question_title"] = ms_entry["question_title"]
+
     return questions
 
 def parse_marking_scheme_structure(text: str) -> List[Dict[str, Any]]:
     """
-    Parses full question structure, sub-parts, titles, and exact max marks from marking scheme text.
+    Parses full question structure, sub-parts, titles, exact max marks,
+    and PAGE NUMBERS (Page Coding) from marking scheme text.
     """
     if not text or not isinstance(text, str):
         return []
@@ -320,11 +478,24 @@ def parse_marking_scheme_structure(text: str) -> List[Dict[str, Any]]:
         r"(?:(?:Question|Q|Part)\s*)?([0-9]+[a-z]?(?:\([a-z0-9ivx]+\))*|\([a-z0-9ivx]+\)|[0-9]+)\s*(?:\(([0-9.]+)\s*marks?\)|:\s*([0-9.]+)\s*marks?)\s*(?:\[([^\]]+)\])?",
         re.IGNORECASE
     )
-    
+    page_pattern = re.compile(
+        r"(?:---|===|#+)?\s*PAGE\s*([0-9]+)\b",
+        re.IGNORECASE
+    )
+
+    current_page = None
     lines = text.split("\n")
     for line in lines:
         line_s = line.strip()
-        if not line_s or line_s.startswith("===") or line_s.startswith("---") or line_s.lower().startswith("topic"):
+        if not line_s:
+            continue
+            
+        m_page = page_pattern.search(line_s)
+        if m_page:
+            current_page = int(m_page.group(1))
+            continue
+            
+        if line_s.startswith("===") or line_s.startswith("---") or line_s.lower().startswith("topic") or line_s.lower().startswith("assignment:"):
             continue
             
         m = pattern.search(line_s)
@@ -332,52 +503,354 @@ def parse_marking_scheme_structure(text: str) -> List[Dict[str, Any]]:
             q_num = m.group(1).strip()
             max_m = float(m.group(2) or m.group(3))
             focus = m.group(4).strip() if m.group(4) else ""
-            title = f"Question {q_num}" + (f" ({focus})" if focus else "")
             
-            if not any(q['question_no'].lower() == q_num.lower() for q in questions):
-                questions.append({
+            col_pos = line_s.find(":")
+            desc = ""
+            if col_pos != -1:
+                desc = line_s[col_pos+1:].strip()
+                desc = re.sub(r"\.\s*.*$", "", desc).strip()
+                if len(desc) > 70:
+                    desc = desc[:67] + "..."
+            
+            title = f"Question {q_num}"
+            if desc:
+                title += f" ({desc})"
+            elif focus:
+                title += f" ({focus})"
+            
+            existing = next((q for q in questions if q['question_no'].lower() == q_num.lower() and q.get('page_number') == current_page), None)
+            if not existing:
+                q_entry = {
                     "question_no": q_num,
                     "question_title": title,
                     "max_marks": max_m
-                })
+                }
+                if current_page is not None:
+                    q_entry["page_number"] = current_page
+                questions.append(q_entry)
                 
     return questions
+
+def extract_question_rubric_slice(
+    marking_scheme_text: Optional[str],
+    question_no: str,
+    rubric_json: Optional[Any] = None
+) -> Optional[str]:
+    """
+    Extracts only the relevant question rubric section from marking_scheme_text or rubric_json.
+    This de-bloats prompts from ~10,000 characters down to ~200 characters per single-question prompt,
+    drastically reducing prompt evaluation tokens, inference latency, and VRAM memory footprint.
+    """
+    if not question_no:
+        return None
+
+    # 1. Check if rubric_json has structured criteria for this question
+    catalog = None
+    if rubric_json:
+        if isinstance(rubric_json, str):
+            try:
+                catalog = json.loads(rubric_json)
+            except Exception:
+                catalog = None
+        elif isinstance(rubric_json, list):
+            catalog = rubric_json
+
+    if catalog and isinstance(catalog, list):
+        norm_q = re.sub(r"[\(\)\s]", "", str(question_no)).lower()
+        for item in catalog:
+            item_q = re.sub(r"[\(\)\s]", "", str(item.get("question_no", ""))).lower()
+            if item_q == norm_q:
+                title = item.get("question_title", f"Question {question_no}")
+                max_m = item.get("max_marks", 1.0)
+                criteria = item.get("criteria", [])
+                lines = [f"Question: {title} (Max: {max_m} marks)"]
+                if criteria:
+                    lines.append("Criteria:")
+                    for c in criteria:
+                        c_name = c.get("criterion", "")
+                        c_max = c.get("max", 1.0)
+                        c_desc = c.get("description", "")
+                        desc_str = f" - {c_desc}" if c_desc else ""
+                        lines.append(f" - [{c_name}] (max {c_max} marks){desc_str}")
+                return "\n".join(lines)
+
+    # 2. Slice from marking_scheme_text using regex pattern matching
+    if not marking_scheme_text or not isinstance(marking_scheme_text, str):
+        return None
+
+    clean_q = re.escape(str(question_no).strip())
+    # Match patterns like: Question 1(a), Q1(a), Part 1(a), 1(a):, Question 1, Q1, Part (c)
+    pattern = rf"(?:^|\n)\s*(?:(?:Question|Q|Part)\s+)?{clean_q}(?:[:\.\s\(\[]|$)"
+    m = re.search(pattern, marking_scheme_text, re.IGNORECASE)
+    if not m:
+        # Try stripping parentheses e.g. '(c)' -> 'c' or '1(a)' -> '1a'
+        alt_q = re.sub(r"[\(\)]", "", str(question_no)).strip()
+        if alt_q and alt_q != str(question_no):
+            pattern = rf"(?:^|\n)\s*(?:(?:Question|Q|Part)\s+)?{re.escape(alt_q)}(?:[:\.\s\(\[]|$)"
+            m = re.search(pattern, marking_scheme_text, re.IGNORECASE)
+        # If question_no is like '(c)', also search for any 'Question <N>(c)'
+        if not m and str(question_no).startswith("(") and str(question_no).endswith(")"):
+            pattern = rf"(?:^|\n)\s*(?:(?:Question|Q|Part)\s+)?[0-9]+{clean_q}(?:[:\.\s\(\[]|$)"
+            m = re.search(pattern, marking_scheme_text, re.IGNORECASE)
+
+    if not m:
+        return None
+
+    start_pos = m.start()
+    sub = marking_scheme_text[start_pos:].lstrip("\r\n")
+
+    # Find next question boundary or section divider
+    next_pattern = re.compile(
+        r"\n\s*(?:(?:Question|Q|Part)\s+[0-9]+[a-zA-Z\(\)]*|[0-9]+[a-zA-Z\(\)]*\s*\([0-9.]+\s*marks?\)|Topic\s+[0-9]+|===|---|PAGE\s+[0-9]+)",
+        re.IGNORECASE
+    )
+    first_nl = sub.find("\n")
+    if first_nl == -1:
+        return sub.strip()
+
+    m_next = next_pattern.search(sub[first_nl:])
+    if m_next:
+        slice_text = sub[:first_nl + m_next.start()].strip()
+    else:
+        slice_text = sub.strip()
+
+    if len(slice_text) >= 15:
+        return slice_text
+    return None
+
+def get_effective_max_marks(
+    marking_scheme_text: Optional[str] = None,
+    rubric_json: Optional[Any] = None,
+    questions: Optional[List[Dict[str, Any]]] = None,
+    default_max: float = 100.0
+) -> float:
+    """
+    Computes dynamic maximum marks without any hardcoded constants:
+    1. Sum of question criteria / max marks from questions list.
+    2. Sum of questions parsed from rubric_json or marking_scheme_text.
+    3. Explicit 'TOTAL MARKS: <N>' header in marking_scheme_text.
+    4. Fallback to default_max.
+    """
+    if questions:
+        total = sum(float(q.get("max_marks", 0.0)) for q in questions if float(q.get("max_marks", 0.0)) > 0)
+        if total > 0:
+            return total
+
+    catalog = []
+    if rubric_json:
+        if isinstance(rubric_json, str):
+            try:
+                parsed = json.loads(rubric_json)
+                if isinstance(parsed, list):
+                    catalog = parsed
+            except Exception:
+                pass
+        elif isinstance(rubric_json, list):
+            catalog = rubric_json
+
+    if not catalog and marking_scheme_text:
+        catalog = parse_marking_scheme_structure(marking_scheme_text)
+
+    if catalog:
+        total = sum(float(q.get("max_marks", 0.0)) for q in catalog if float(q.get("max_marks", 0.0)) > 0)
+        if total > 0:
+            return total
+
+    if marking_scheme_text:
+        m = re.search(r"TOTAL\s*MARKS?\s*[\:\=]?\s*\(?([0-9]+(?:\.[0-9]+)?)\)?", marking_scheme_text, re.IGNORECASE)
+        if m:
+            try:
+                return float(m.group(1))
+            except Exception:
+                pass
+
+    return default_max
 
 def align_extracted_questions_with_scheme(
     extracted_qs: List[Dict[str, Any]],
     marking_scheme_text: str,
-    default_max_marks: float = 1.0
+    default_max_marks: float = 1.0,
+    rubric_json: Optional[Any] = None
 ) -> List[Dict[str, Any]]:
     """
     Aligns raw extracted questions with the official marking scheme questions catalog.
-    Enforces exact max marks from the marking scheme and resolves sub-part numbering (e.g. (a) -> 1(a) or 5(a)).
+    Implements Page Coding: Scopes alignment by page_number so that local page numbering
+    (e.g., Page 2 Q1..Q4) correctly maps to marking scheme questions for Page 2 (e.g., Q3..Q6),
+    resolves sub-parts, and ensures complete coverage without ghost duplicates.
     """
-    catalog = parse_marking_scheme_structure(marking_scheme_text)
+    catalog = []
+    if rubric_json:
+        if isinstance(rubric_json, str):
+            try:
+                parsed = json.loads(rubric_json)
+                if isinstance(parsed, list):
+                    catalog = parsed
+            except Exception:
+                catalog = []
+        elif isinstance(rubric_json, list):
+            catalog = rubric_json
+
+    if not catalog and marking_scheme_text:
+        catalog = parse_marking_scheme_structure(marking_scheme_text)
+
     if not catalog:
         for q in extracted_qs:
             if "max_marks" not in q or q["max_marks"] == 5.0:
                 q["max_marks"] = default_max_marks
         return extracted_qs
-        
-    scheme_dict = {q['question_no'].lower(): q for q in catalog}
+
+    # Check for Page Coding in the catalog
+    catalog_by_page: Dict[int, List[Dict[str, Any]]] = {}
+    has_page_coding = False
+    for c in catalog:
+        p = c.get("page_number")
+        if p is not None:
+            has_page_coding = True
+            catalog_by_page.setdefault(int(p), []).append(c)
+
+    # If rubric_json didn't have page numbers but marking_scheme_text does, enrich catalog
+    if not has_page_coding and marking_scheme_text:
+        text_catalog = parse_marking_scheme_structure(marking_scheme_text)
+        text_page_map = {re.sub(r"[\(\)\s]", "", str(t.get("question_no", ""))).lower(): t.get("page_number") for t in text_catalog if t.get("page_number") is not None}
+        for c in catalog:
+            clean_c = re.sub(r"[\(\)\s]", "", str(c.get("question_no", ""))).lower()
+            if clean_c in text_page_map:
+                c["page_number"] = text_page_map[clean_c]
+                has_page_coding = True
+                catalog_by_page.setdefault(int(c["page_number"]), []).append(c)
+
+    extracted_by_page: Dict[int, List[Dict[str, Any]]] = {}
+    for q in extracted_qs:
+        p = int(q.get("page_number", 1) or 1)
+        extracted_by_page.setdefault(p, []).append(q)
+
     aligned = []
-    
+
+    if has_page_coding:
+        all_pages = sorted(set(list(catalog_by_page.keys()) + list(extracted_by_page.keys())))
+        for p in all_pages:
+            p_catalog = catalog_by_page.get(p, [])
+            p_extracted = extracted_by_page.get(p, [])
+            
+            if not p_catalog:
+                aligned.extend(p_extracted)
+                continue
+
+            p_scheme_dict = {str(c.get('question_no', '')).strip().lower(): c for c in p_catalog}
+            p_clean_dict = {re.sub(r"[\(\)\s]", "", str(c.get('question_no', ''))).lower(): c for c in p_catalog}
+            matched_catalog_indices = set()
+
+            for idx, raw_q in enumerate(p_extracted):
+                raw_no = str(raw_q.get("question_no", "")).strip().lower()
+                clean_raw = re.sub(r"[\(\)\s]", "", raw_no)
+                stripped = re.sub(r"^(?:question|q|part)\s*", "", raw_no).strip()
+                clean_stripped = re.sub(r"[\(\)\s]", "", stripped)
+                matched = None
+                matched_cand_idx = None
+
+                # 1. Exact match in page catalog (only if not already claimed)
+                cand = None
+                if raw_no in p_scheme_dict and p_catalog.index(p_scheme_dict[raw_no]) not in matched_catalog_indices:
+                    cand = p_scheme_dict[raw_no]
+                elif clean_raw in p_clean_dict and p_catalog.index(p_clean_dict[clean_raw]) not in matched_catalog_indices:
+                    cand = p_clean_dict[clean_raw]
+                elif stripped in p_scheme_dict and p_catalog.index(p_scheme_dict[stripped]) not in matched_catalog_indices:
+                    cand = p_scheme_dict[stripped]
+                elif clean_stripped in p_clean_dict and p_catalog.index(p_clean_dict[clean_stripped]) not in matched_catalog_indices:
+                    cand = p_clean_dict[clean_stripped]
+                elif stripped.startswith("(") and stripped.endswith(")"):
+                    cands = [c for c in p_catalog if str(c.get('question_no', '')).strip().lower().endswith(stripped) and p_catalog.index(c) not in matched_catalog_indices]
+                    if cands:
+                        cand = cands[0]
+
+                if cand:
+                    matched = cand
+                    matched_cand_idx = p_catalog.index(cand)
+
+                # 2. Positional match on this page if not directly matched
+                if not matched:
+                    available = [i for i in range(len(p_catalog)) if i not in matched_catalog_indices]
+                    if available:
+                        target_idx = idx if idx in available else available[0]
+                        matched = p_catalog[target_idx]
+                        matched_cand_idx = target_idx
+
+                if matched and matched_cand_idx is not None:
+                    matched_catalog_indices.add(matched_cand_idx)
+                    final_q_no = str(matched.get("question_no", raw_q.get("question_no")))
+                    final_title = matched.get("question_title", f"Question {final_q_no}")
+                    final_max = float(matched.get("max_marks", default_max_marks))
+                    raw_crits = matched.get("criteria", [])
+                    crit_list = [
+                        {
+                            "criterion": str(c.get("criterion", "Criterion")),
+                            "max": float(c.get("max", 1.0)),
+                            "awarded": 0.0,
+                            "comment": str(c.get("description", ""))
+                        }
+                        for c in raw_crits if isinstance(c, dict)
+                    ] if raw_crits else raw_q.get("criteria", [])
+
+                    aligned.append({
+                        **raw_q,
+                        "question_no": final_q_no,
+                        "question_title": final_title,
+                        "max_marks": final_max,
+                        "page_number": p,
+                        "awarded_marks": float(raw_q.get("awarded_marks", 0.0)),
+                        "extracted_answer": raw_q.get("extracted_answer", ""),
+                        "criteria": crit_list,
+                        "feedback_comment": raw_q.get("feedback_comment", "")
+                    })
+
+            # Populate any questions from this page's catalog that were not answered/extracted
+            for c_idx, c in enumerate(p_catalog):
+                if c_idx not in matched_catalog_indices:
+                    final_q_no = str(c.get("question_no"))
+                    final_title = c.get("question_title", f"Question {final_q_no}")
+                    final_max = float(c.get("max_marks", default_max_marks))
+                    raw_crits = c.get("criteria", [])
+                    crit_list = [
+                        {
+                            "criterion": str(cr.get("criterion", "Criterion")),
+                            "max": float(cr.get("max", 1.0)),
+                            "awarded": 0.0,
+                            "comment": str(cr.get("description", ""))
+                        }
+                        for cr in raw_crits if isinstance(cr, dict)
+                    ]
+                    slot_h = min(220, max(75, int(680 / max(1, len(p_catalog)))))
+                    base_y = min(880, 240 + (c_idx * slot_h))
+                    unanswered_bbox = c.get("bbox_2d") or [base_y, 120, min(960, base_y + max(40, int(slot_h * 0.45))), 860]
+
+                    aligned.append({
+                        "question_no": final_q_no,
+                        "question_title": final_title,
+                        "max_marks": final_max,
+                        "page_number": p,
+                        "awarded_marks": 0.0,
+                        "extracted_answer": "[Blank / No response]",
+                        "criteria": crit_list,
+                        "feedback_comment": f"No marks awarded (0/{final_max}). Question left blank.",
+                        "bbox_2d": unanswered_bbox
+                    })
+        return aligned
+
+    # Fallback to global matching if no page coding in scheme
+    scheme_dict = {str(q.get('question_no', '')).strip().lower(): q for q in catalog}
     for idx, raw_q in enumerate(extracted_qs):
         q_no = str(raw_q.get("question_no", "")).strip()
         raw_clean = q_no.lower()
         matched = None
         
-        # 1. Exact match in catalog
         if raw_clean in scheme_dict:
             matched = scheme_dict[raw_clean]
         else:
-            # 2. Strip prefix variations
             stripped = re.sub(r"^(?:question|q|part)\s*", "", raw_clean).strip()
             if stripped in scheme_dict:
                 matched = scheme_dict[stripped]
             elif stripped.startswith("(") and stripped.endswith(")"):
-                # Sub-part like (a), (b), (c) -> pick candidate closest to current position ratio
-                candidates = [c for c in catalog if c['question_no'].lower().endswith(stripped)]
+                candidates = [c for c in catalog if str(c.get('question_no', '')).strip().lower().endswith(stripped)]
                 if len(candidates) == 1:
                     matched = candidates[0]
                 elif len(candidates) > 1:
@@ -387,22 +860,39 @@ def align_extracted_questions_with_scheme(
                     best_cand = min(candidates, key=lambda c: abs(catalog.index(c) - cand_idx))
                     matched = best_cand
             else:
-                # 3. Fuzzy search in catalog
                 for cand in catalog:
-                    if cand['question_no'].lower() == stripped or stripped in cand['question_no'].lower():
+                    c_no = str(cand.get('question_no', '')).strip().lower()
+                    if c_no == stripped or stripped in c_no:
                         matched = cand
                         break
 
         if matched:
-            final_q_no = matched["question_no"]
-            final_title = matched["question_title"]
-            final_max = float(matched["max_marks"])
+            final_q_no = str(matched.get("question_no", q_no))
+            final_title = matched.get("question_title", f"Question {final_q_no}")
+            final_max = float(matched.get("max_marks", default_max_marks))
+            raw_crits = matched.get("criteria", [])
+            crit_list = [
+                {
+                    "criterion": str(c.get("criterion", "Criterion")),
+                    "max": float(c.get("max", 1.0)),
+                    "awarded": 0.0,
+                    "comment": str(c.get("description", ""))
+                }
+                for c in raw_crits if isinstance(c, dict)
+            ] if raw_crits else raw_q.get("criteria", [])
         else:
             final_q_no = q_no or f"Q{idx+1}"
             final_title = raw_q.get("question_title", f"Question {final_q_no}")
             final_max = float(raw_q.get("max_marks", default_max_marks))
             if final_max == 5.0 and default_max_marks != 5.0:
                 final_max = default_max_marks
+            crit_list = raw_q.get("criteria", [])
+            record_fallback(
+                source="Question Catalog Alignment",
+                trigger=f"Question '{q_no}' not matched in marking scheme catalog",
+                action=f"Retained extracted question with default max marks ({final_max})",
+                details=f"Assigned title: '{final_title}'"
+            )
                 
         aligned.append({
             **raw_q,
@@ -411,7 +901,7 @@ def align_extracted_questions_with_scheme(
             "max_marks": final_max,
             "awarded_marks": float(raw_q.get("awarded_marks", 0.0)),
             "extracted_answer": raw_q.get("extracted_answer", ""),
-            "criteria": raw_q.get("criteria", []),
+            "criteria": crit_list,
             "feedback_comment": raw_q.get("feedback_comment", "")
         })
         
@@ -459,110 +949,18 @@ def step1a_extract_student_responses_verbatim(
     vision_model: str = DEFAULT_VISION_MODEL
 ) -> Dict[str, Any]:
     """
-    Step 1A: Vision AI extracts and transcribes the student's handwritten responses page-by-page
-    verbatim question by question and part by part, using relaxed spatial bounding between question anchors,
-    caret insertions, numbers/measurements, and diagram traceback, without grading yet.
+    Step 1A: Vision AI extracts and transcribes the student's handwritten responses page-by-page.
+    Delegates to the selected/auto-detected subject marker.
     """
-    assignment_title = assignment_info.get("title", "Assignment")
-    subject = assignment_info.get("subject", "General")
-    max_marks = float(assignment_info.get("max_marks", 100.0))
-    student_name = student_info.get("name", "Student")
-    student_id = student_info.get("student_id", "")
-    
-    if not pages:
-        return {"success": False, "error": "No page images available for extraction."}
-        
-    all_extracted_questions = []
-    
-    for p_idx, p in enumerate(pages, 1):
-        img_path = p.get("image_path")
-        if not img_path:
-            continue
-            
-        b64 = get_page_base64(img_path)
-        prompt = f"""Extract student handwriting from Page {p_idx} of {len(pages)}.
-
-CRITICAL RULES:
-1. ONLY transcribe HANDWRITTEN student answers. Ignore all pre-printed question text.
-2. STRICT GRID FIDELITY FOR GRAPHS (NEVER COPY FROM PRINTED DATA TABLES):
-   - Look directly at the student's physical handwritten axis numbers on the grid.
-     * If the student wrote '1, 2, 3, 4, 5' on the vertical axis instead of tens, transcribe Y-axis scale as '1, 2, 3, 4, 5'.
-   - Read the EXACT visual coordinates where each hand-drawn cross 'x' or dot was physically marked on the grid.
-     * Do NOT copy the table's expected numbers (e.g. 24, 30, 36). Transcribe the actual grid intersections marked (e.g. (1, 2), (2, 3), (3, 3.6)...).
-     * If the student omitted a data point (e.g. t=0) or started the line from origin (0,0), explicitly note it.
-   - Transcribe graph format strictly as:
-     Question <No>: [Graph: X-axis="<Label & Unit>" (Scale: <Handwritten Scale>), Y-axis="<Label & Unit>" (Scale: <Handwritten Scale>), Plotted Points: [(x1, y1), (x2, y2)...] (Total N points), Line: "<Detailed description: CAREFULLY TRACE the line between each point. If the slope changes (dot-to-dot), state 'straight line segments connecting subsequent points'. Otherwise state if it's a best fit line, ONE straight line through all points, or a smooth curve. Explicitly note if drawn with a ruler, if smooth, if branched/hairy (sketched), and if it passes through origin (0,0)>"]
-3. TABULAR DATA:
-   - Transcribe student filled-in cells row-by-row into:
-     Question <No>: [Table: Header=["<Col1>", "<Col2>", ...], Rows=[["<Val1>", "<Val2>", ...], ...]]
-4. FILL-IN-THE-BLANKS & MEASUREMENTS:
-   - Extract the exact handwritten value and unit.
-5. If blank, write: Question <No>: [Blank / No response]
-
-Output format strictly:
-Question <No>: <Answer>
-"""
-
-        res = ollama_client.generate_chat(
-            model=vision_model,
-            messages=[{"role": "user", "content": prompt, "images": [b64]}],
-            format_json=False,
-            temperature=0.0,
-            timeout=90,
-            num_ctx=DEFAULT_OCR_NUM_CTX,
-            reasoning_effort="low"
-        )
-        
-        p_qs = []
-        if res.get("success"):
-            p_qs = parse_questions_from_ocr_text(res.get("content", ""), page_num=p_idx)
-            
-        if not p_qs:
-            # Fallback for this page so it is NEVER silently dropped
-            page_content = res.get("content", "").strip() if res.get("success") else "[Page extraction error / timeout]"
-            p_qs = [{
-                "question_no": f"Page {p_idx}",
-                "question_title": f"Page {p_idx} Workings & Responses",
-                "extracted_answer": page_content or "[Blank / No handwriting detected]"
-            }]
-            
-        for q in p_qs:
-            ans = q.get("extracted_answer", "")
-            if isinstance(ans, (dict, list)):
-                ans = json.dumps(ans)
-            all_extracted_questions.append({
-                "question_no": str(q.get("question_no", f"Q{len(all_extracted_questions)+1}")),
-                "question_title": q.get("question_title", f"Question {q.get('question_no', '')}"),
-                "max_marks": float(q.get("max_marks", 5.0)),
-                "awarded_marks": 0.0,
-                "extracted_answer": str(ans),
-                "criteria": [],
-                "feedback_comment": "",
-                "page_number": p_idx
-            })
-
-    if not all_extracted_questions:
-        # Fallback question item if none detected
-        all_extracted_questions = [{
-            "question_no": "1",
-            "question_title": "Student Submission",
-            "max_marks": max_marks,
-            "awarded_marks": 0.0,
-            "extracted_answer": "[Blank / No handwriting detected]",
-            "criteria": [],
-            "feedback_comment": ""
-        }]
-        
-    return {
-        "success": True,
-        "step": "1A",
-        "questions": all_extracted_questions,
-        "total_score": 0.0,
-        "max_marks": sum(float(q.get("max_marks", 0)) for q in all_extracted_questions) or max_marks,
-        "percentage": 0.0,
-        "grade_letter": "--",
-        "ai_model_used": vision_model
-    }
+    from app.markers.registry import get_marker
+    marker_type = assignment_info.get("marker_type")
+    marker = get_marker(marker_type, assignment_info.get("subject", ""), assignment_info.get("title", ""))
+    return marker.extract_student_responses(
+        assignment_info=assignment_info,
+        student_info=student_info,
+        pages=pages,
+        vision_model=vision_model
+    )
 
 def mark_single_question(
     q: Dict[str, Any],
@@ -571,273 +969,17 @@ def mark_single_question(
     reasoning_model: str = DEFAULT_TEXT_MODEL
 ) -> Dict[str, Any]:
     """
-    Evaluates a single student question against the marking scheme in a focused,
-    high-precision prompt with zero context overflow.
+    Evaluates a single student question against the marking scheme using the subject marker.
     """
-    q_no = str(q.get("question_no", "1")).strip()
-    q_title = str(q.get("question_title", f"Question {q_no}")).strip()
-    q_max = float(q.get("max_marks", 5.0))
-    extracted = str(q.get("extracted_answer", "")).strip()
-    
-    assignment_title = assignment_info.get("title", "Assignment")
-    subject = assignment_info.get("subject", "General")
-    marking_scheme = assignment_info.get("marking_scheme_text", "")
-    rubric_json = assignment_info.get("rubric_json", "[]")
-    
-    # If the response is marked as blank or empty
-    if not extracted or extracted.lower() in ("[blank / no handwriting detected]", "[blank]", "blank", "none", "no response"):
-        return {
-            **q,
-            "question_no": q_no,
-            "question_title": q_title,
-            "max_marks": q_max,
-            "awarded_marks": 0.0,
-            "extracted_answer": extracted or "[Blank / No response]",
-            "criteria": [{"criterion": "Response provided", "max": q_max, "awarded": 0.0, "comment": "No answer written"}],
-            "feedback_comment": f"No marks awarded (0/{q_max}). Question left blank."
-        }
-
-    # Resolve question label aliases for matching (e.g. (a) -> Question 1(a))
-    q_aliases = [q_no]
-    if q_no.startswith("(") and q_no.endswith(")"):
-        q_aliases.append(f"1{q_no}")
-        q_aliases.append(f"Question 1{q_no}")
-        q_aliases.append(f"Q1{q_no}")
-    else:
-        q_aliases.append(f"Question {q_no}")
-        q_aliases.append(f"Q{q_no}")
-
-    # Auto-detect true max marks from marking scheme text if available
-    for alias in q_aliases:
-        m = re.search(rf"(?:Question|Q|Part)?\s*{re.escape(alias)}\s*\(([0-9]+(?:\.[0-9]+)?)\s*marks?\)", marking_scheme, re.IGNORECASE)
-        if m:
-            try:
-                q_max = float(m.group(1))
-                break
-            except Exception:
-                pass
-    
-    prompt = f"""You are an expert examiner grading Question {q_no}.
-
-Subject: {subject}
-Assignment: {assignment_title}
-Question: {q_no} - {q_title}
-Maximum Marks: {q_max}
-
-OFFICIAL MARKING SCHEME & RUBRIC:
-----------------------------------------
-{marking_scheme}
-----------------------------------------
-
-{GRAPH_EVALUATION_GUIDANCE}
-
-STUDENT EXTRACTED ANSWER / WORKING FOR QUESTION {q_no}:
-----------------------------------------
-{extracted}
-----------------------------------------
-
-GRADING & FEEDBACK INSTRUCTIONS:
-1. Evaluate every rubric criterion for Question {q_no} and determine exact awarded_marks (0.0 to {q_max}).
-2. Populate the 'criteria' array with an object for each criterion containing:
-   - "criterion": Name / description of criterion
-   - "max": Maximum marks for this criterion
-   - "awarded": Marks awarded (0.0 to max)
-   - "comment": Specific diagnostic feedback for this criterion (e.g. "✓ Correct..." or "✗ Error: [specific mistake]. Expected: [expected answer]")
-3. 'feedback_comment':
-   - For 1-mark questions: Provide 1 concise sentence ("✓ Correct. [reason]" or "✗ Error: [mistake]. Expected: [expected]").
-   - For multi-mark / graph / table questions: Provide a comprehensive diagnostic summary stating the specific errors identified across all criteria (e.g. axes, scales, exact plotted point mismatches, omitted points, and line/curve shape) and the expected correct values.
-4. Return STRICTLY valid JSON.
-
-JSON FORMAT:
-{{
-  "awarded_marks": {q_max},
-  "criteria": [
-    {{"criterion": "Axes & Labels", "max": 1.0, "awarded": 1.0, "comment": "✓ Quantity and units labelled correctly."}},
-    {{"criterion": "Linear Scales", "max": 1.0, "awarded": 0.0, "comment": "✗ Error: Y-axis scale numbered 1-5 instead of 0-60 °C. Expected: Linear scale 0-60 °C."}}
-  ],
-  "feedback_comment": "✗ Error: Y-axis scale numbered 1-5 instead of 0-60 °C; point (0, 24) omitted. Expected: Linear scale 0-60 °C with points (0,24), (1,30)..."
-}}
-"""
-
-    result = ollama_client.generate_chat(
-        model=reasoning_model,
-        messages=[{"role": "user", "content": prompt}],
-        format_json=True,
-        temperature=0.1,
-        timeout=120,
-        num_ctx=DEFAULT_GRADING_NUM_CTX,
-        num_predict=3000,
-        reasoning_effort="none"
+    from app.markers.registry import get_marker
+    marker_type = assignment_info.get("marker_type")
+    marker = get_marker(marker_type, assignment_info.get("subject", ""), assignment_info.get("title", ""))
+    return marker.mark_single_question(
+        q=q,
+        assignment_info=assignment_info,
+        student_info=student_info,
+        reasoning_model=reasoning_model
     )
-
-    awarded = 0.0
-    criteria = []
-    comment = ""
-
-    if result.get("success"):
-        content = result.get("content", "")
-        thinking = result.get("thinking", "")
-        
-        # 1. Try parse JSON from content
-        parsed = clean_and_parse_json(content)
-        # 2. If not found, try parse JSON from thinking
-        if not parsed and thinking:
-            parsed = clean_and_parse_json(thinking)
-
-        if parsed and isinstance(parsed, dict):
-            if "questions" in parsed and isinstance(parsed["questions"], list) and len(parsed["questions"]) > 0:
-                q_data = parsed["questions"][0]
-            else:
-                q_data = parsed
-
-            if "awarded_marks" in q_data:
-                try:
-                    awarded = min(float(q_data["awarded_marks"]), q_max)
-                except Exception:
-                    pass
-            elif "score" in q_data:
-                try:
-                    awarded = min(float(q_data["score"]), q_max)
-                except Exception:
-                    pass
-
-            if "criteria" in q_data and isinstance(q_data["criteria"], list):
-                criteria = q_data["criteria"]
-
-            if "feedback_comment" in q_data:
-                comment = str(q_data["feedback_comment"]).strip()
-
-        # 3. Fallback regex extraction across both content and thinking
-        combined_text = f"{content}\n{thinking}"
-        if combined_text.strip():
-            # Extract criteria objects via regex if not parsed
-            if not criteria:
-                crit_matches = re.finditer(
-                    r"\{\s*\"criterion\"\s*:\s*\"([^\"]+)\"\s*,\s*\"max\"\s*:\s*([0-9.]+)\s*,\s*\"awarded\"\s*:\s*([0-9.]+)(?:\s*,\s*\"comment\"\s*:\s*\"([^\"]*)\")?\s*\}",
-                    combined_text
-                )
-                for cm in crit_matches:
-                    try:
-                        criteria.append({
-                            "criterion": cm.group(1),
-                            "max": float(cm.group(2)),
-                            "awarded": float(cm.group(3)),
-                            "comment": cm.group(4) or ""
-                        })
-                    except Exception:
-                        pass
-
-            # Extract feedback comment via regex if not parsed
-            if not comment:
-                fb_match = re.search(r"\"feedback_comment\"\s*:\s*\"([^\"]+)\"", combined_text)
-                if fb_match:
-                    comment = fb_match.group(1).strip()
-                else:
-                    fb_match2 = re.search(r"(?:feedback|comment|reason|rationale)\s*[:=]\s*([^\n\r]+)", combined_text, re.IGNORECASE)
-                    if fb_match2:
-                        comment = fb_match2.group(1).strip()
-
-            # Check for JSON awarded_marks in text
-            if awarded == 0.0:
-                json_marks = re.search(r"\"awarded_marks\"\s*:\s*([0-9]+(?:\.[0-9]+)?)", combined_text, re.IGNORECASE)
-                if json_marks:
-                    try:
-                        awarded = min(float(json_marks.group(1)), q_max)
-                    except Exception:
-                        pass
-                
-                if awarded == 0.0:
-                    award_patterns = [
-                        r"Total[^\n]*?=\s*([0-9]+(?:\.[0-9]+)?)\s*(?:marks?)?",
-                        r"(?:award|awarded|score|scored)\s*(?:a\s+total\s+of\s+)?([0-9]+(?:\.[0-9]+)?)\s*(?:marks?|pts?|points?)?",
-                        r"([0-9]+(?:\.[0-9]+)?)\s*(?:\/|\s*out of)\s*([0-9]+(?:\.[0-9]+)?)",
-                        r"([0-9]+(?:\.[0-9]+)?)\s*(?:marks?|pts?|points?)\s*(?:for\s+this|awarded)"
-                    ]
-                    for pat in award_patterns:
-                        match = re.search(pat, combined_text, re.IGNORECASE)
-                        if match:
-                            try:
-                                score_val = float(match.group(1))
-                                if 0.0 < score_val <= q_max:
-                                    awarded = score_val
-                                    break
-                            except Exception:
-                                pass
-
-        # 4. Extract structured criteria and feedback from thinking buffer if still empty
-        if thinking and (not criteria or awarded == 0.0):
-            blocks = re.split(r"\n(?=\s*(?:\*\*[^*]+\*\*|\b[0-9]+\.\s*\*\*))", thinking)
-            extracted_crits = []
-            for block in blocks:
-                b_s = block.strip()
-                title_m = re.search(r"\*\*([^*]+)\*\*", b_s)
-                if not title_m:
-                    continue
-                title = title_m.group(1).strip(" :")
-                if title.lower().startswith("total"):
-                    continue
-                mark_m = re.search(r"(?:→|award|awarded|score|gives?)\s*[:=]?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:marks?|pts?|points?)?", b_s, re.IGNORECASE)
-                mark_val = float(mark_m.group(1)) if mark_m else (1.0 if "✓" in b_s and "0 marks" not in b_s and "not awarded" not in b_s else 0.0)
-                if mark_val == 0.0:
-                    err_m = re.search(r"([^.\n]+(?:omitted|wrong|incorrect|doesn't match|missing|inappropriate|not in the range)[^.\n]*)", b_s, re.IGNORECASE)
-                    comment_text = f"✗ Error: {err_m.group(1).strip()}." if err_m else "✗ Error: Criteria not met."
-                else:
-                    comment_text = f"✓ {title} criteria met."
-                extracted_crits.append({
-                    "criterion": title,
-                    "max": 1.0,
-                    "awarded": min(mark_val, 1.0),
-                    "comment": comment_text
-                })
-            if extracted_crits and not criteria:
-                criteria = extracted_crits
-                if awarded == 0.0:
-                    awarded = min(sum(c['awarded'] for c in criteria), q_max)
-
-    # If criteria is present, ensure awarded_marks matches sum of criteria if awarded was 0
-    if criteria and awarded == 0.0:
-        sum_c = sum(float(c.get("awarded", 0.0)) for c in criteria)
-        if sum_c > 0.0:
-            awarded = min(sum_c, q_max)
-
-    # Intelligent comment fallback: Synthesize detailed remark from criteria if comment is empty or generic
-    if not comment or comment.lower() in ("evaluated by ai.", "criteria not met.", "matches marking scheme."):
-        if criteria:
-            failed_crits = [c for c in criteria if float(c.get("awarded", 0)) < float(c.get("max", 1.0))]
-            passed_crits = [c for c in criteria if float(c.get("awarded", 0)) >= float(c.get("max", 1.0))]
-            
-            if not failed_crits:
-                crit_summaries = ", ".join(c.get("criterion", "") for c in passed_crits[:3])
-                comment = f"✓ Correct ({awarded}/{q_max} marks). All criteria met: {crit_summaries}."
-            else:
-                err_details = []
-                for c in failed_crits:
-                    c_name = c.get("criterion", "Criterion")
-                    c_comm = c.get("comment", "")
-                    if c_comm and not c_comm.lower().startswith("criterion feedback") and "criteria not met" not in c_comm.lower():
-                        clean_c = re.sub(r"^[✗✓\s\:\-]+", "", c_comm).strip()
-                        err_details.append(f"{c_name}: {clean_c}")
-                    else:
-                        err_details.append(f"{c_name}: requirement not met")
-                comment = f"✗ Partial credit ({awarded}/{q_max} marks). " + "; ".join(err_details)
-        else:
-            if awarded >= q_max:
-                comment = f"✓ Correct ({awarded}/{q_max} marks). Matches marking scheme."
-            elif awarded > 0:
-                comment = f"✗ Partial credit ({awarded}/{q_max} marks). Incomplete method or missing step."
-            else:
-                comment = f"✗ Error (0/{q_max} marks). Incomplete or incorrect answer."
-
-    return {
-        **q,
-        "question_no": q_no,
-        "question_title": q_title,
-        "max_marks": q_max,
-        "awarded_marks": round(awarded, 1),
-        "extracted_answer": extracted,
-        "criteria": criteria,
-        "feedback_comment": comment
-    }
 
 def step1b_mark_extracted_questions(
     assignment_info: Dict[str, Any],
@@ -846,69 +988,17 @@ def step1b_mark_extracted_questions(
     reasoning_model: str = DEFAULT_TEXT_MODEL
 ) -> Dict[str, Any]:
     """
-    Step 1B: Evaluates questions question-by-question against the marking scheme.
-    Uses concurrent thread pooling for rapid multi-question marking.
+    Step 1B: Evaluates questions against the marking scheme using the subject marker.
     """
-    import concurrent.futures
-
-    max_marks = float(assignment_info.get("max_marks", 100.0))
-    if not questions:
-        return {"success": False, "error": "No questions to mark."}
-
-    # Parallel evaluation across questions (max 3 workers to prevent resource contention)
-    num_workers = min(len(questions), 3)
-    scored_dict = {}
-
-    if num_workers <= 1:
-        marked_questions = [
-            mark_single_question(
-                q=q,
-                assignment_info=assignment_info,
-                student_info=student_info,
-                reasoning_model=reasoning_model
-            )
-            for q in questions
-        ]
-    else:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
-            future_to_idx = {
-                executor.submit(
-                    mark_single_question,
-                    q=q,
-                    assignment_info=assignment_info,
-                    student_info=student_info,
-                    reasoning_model=reasoning_model
-                ): idx
-                for idx, q in enumerate(questions)
-            }
-            for future in concurrent.futures.as_completed(future_to_idx):
-                idx = future_to_idx[future]
-                try:
-                    scored_dict[idx] = future.result()
-                except Exception as e:
-                    orig_q = questions[idx]
-                    scored_dict[idx] = {
-                        **orig_q,
-                        "awarded_marks": 0.0,
-                        "feedback_comment": f"Evaluation error: {str(e)}"
-                    }
-        marked_questions = [scored_dict[i] for i in range(len(questions))]
-
-    computed_awarded = sum(float(q.get("awarded_marks", 0.0)) for q in marked_questions)
-    computed_max = sum(float(q.get("max_marks", 0.0)) for q in marked_questions) or max_marks
-    pct = round((computed_awarded / computed_max * 100.0), 1) if computed_max > 0 else 0.0
-    grade = compute_grade_letter(pct)
-
-    return {
-        "success": True,
-        "step": "1B",
-        "questions": marked_questions,
-        "total_score": round(computed_awarded, 1),
-        "max_marks": computed_max,
-        "percentage": pct,
-        "grade_letter": grade,
-        "ai_model_used": reasoning_model
-    }
+    from app.markers.registry import get_marker
+    marker_type = assignment_info.get("marker_type")
+    marker = get_marker(marker_type, assignment_info.get("subject", ""), assignment_info.get("title", ""))
+    return marker.mark_questions(
+        questions=questions,
+        assignment_info=assignment_info,
+        student_info=student_info,
+        reasoning_model=reasoning_model
+    )
 
 def step1_mark_questions_by_parts(
     assignment_info: Dict[str, Any],
@@ -946,125 +1036,18 @@ def step2_evaluate_and_comment(
     reasoning_model: str = DEFAULT_TEXT_MODEL
 ) -> Dict[str, Any]:
     """
-    Step 2 of AI Marking: Synthesizes personalized overall remarks, key strengths,
-    and actionable improvement areas based on the verified question-by-question marks.
+    Step 2: Synthesizes personalized overall remarks, key strengths,
+    and actionable improvement areas using the subject marker.
     """
-    assignment_title = assignment_info.get("title", "Assignment")
-    subject = assignment_info.get("subject", "General")
-    student_name = student_info.get("name", "Student")
-    
-    computed_awarded = sum(float(q.get("awarded_marks", 0.0)) for q in questions)
-    computed_max = sum(float(q.get("max_marks", 0.0)) for q in questions) or 100.0
-    pct = round((computed_awarded / computed_max * 100.0), 1) if computed_max > 0 else 0.0
-    grade = compute_grade_letter(pct)
-    
-    questions_summary = []
-    for q in questions:
-        q_num = q.get("question_no", "")
-        title = q.get("question_title", "")
-        awarded = q.get("awarded_marks", 0)
-        q_max = q.get("max_marks", 0)
-        comment = q.get("feedback_comment", "")
-        questions_summary.append(f"- Q{q_num} ({title}): {awarded}/{q_max} marks. Notes: {comment}")
-        
-    summary_text = "\n".join(questions_summary)
-    
-    prompt = f"""You are an encouraging master teacher writing concise feedback for {student_name}'s assignment.
-
-Subject: {subject}
-Assignment: {assignment_title}
-Overall Result: {computed_awarded} / {computed_max} marks ({pct}%) - Grade {grade}
-
-QUESTION-BY-QUESTION SUMMARY:
-----------------------------------------
-{summary_text}
-----------------------------------------
-
-RULES FOR CONCISE SUMMARY (STRICT):
-1. 'overall_feedback': Direct and brief (MAX 2-3 sentences).
-2. 'strengths': 2 short bullet points highlighting what went well (under 8 words each).
-3. 'areas_for_improvement': 2 short bullet points stating exact question and error to fix (under 12 words each).
-4. Return STRICTLY JSON.
-
-JSON FORMAT:
-{{
-  "overall_feedback": "Dear {student_name}, solid effort scoring {computed_awarded}/{computed_max} ({pct}%). Review the specific errors highlighted below to master key concepts.",
-  "strengths": [
-    "Accurate calculation methods",
-    "Clear handwriting and presentation"
-  ],
-  "areas_for_improvement": [
-    "Review Question 2(a): close air-hole before opening gas",
-    "Review Question 1(e): state concrete lab precautions"
-  ]
-}}
-"""
-
-    result = ollama_client.generate_chat(
-        model=reasoning_model,
-        messages=[{"role": "user", "content": prompt}],
-        format_json=True,
-        temperature=0.1,
-        timeout=90,
-        num_ctx=DEFAULT_GRADING_NUM_CTX,
-        num_predict=1500,
-        reasoning_effort="none"
+    from app.markers.registry import get_marker
+    marker_type = assignment_info.get("marker_type")
+    marker = get_marker(marker_type, assignment_info.get("subject", ""), assignment_info.get("title", ""))
+    return marker.synthesize_feedback(
+        questions=questions,
+        assignment_info=assignment_info,
+        student_info=student_info,
+        reasoning_model=reasoning_model
     )
-    
-    overall = ""
-    strengths_text = ""
-    improvements_text = ""
-    
-    if result.get("success"):
-        content = result.get("content", "")
-        thinking = result.get("thinking", "")
-        parsed_json = clean_and_parse_json(content)
-        if not parsed_json and thinking:
-            parsed_json = clean_and_parse_json(thinking)
-
-        if parsed_json and isinstance(parsed_json, dict):
-            overall = str(parsed_json.get("overall_feedback", "")).strip()
-            
-            strengths = parsed_json.get("strengths", [])
-            if isinstance(strengths, list) and strengths:
-                strengths_text = "\n".join(f"• {s}" for s in strengths if s)
-            elif isinstance(strengths, str) and strengths.strip():
-                strengths_text = strengths.strip()
-                
-            improvements = parsed_json.get("areas_for_improvement", [])
-            if isinstance(improvements, list) and improvements:
-                improvements_text = "\n".join(f"• {s}" for s in improvements if s)
-            elif isinstance(improvements, str) and improvements.strip():
-                improvements_text = improvements.strip()
-
-    # Smart default fallback if LLM response was incomplete or empty
-    if not overall:
-        overall = f"Dear {student_name},\n\nYou scored {computed_awarded} / {computed_max} marks ({pct}%, Grade {grade}) on {assignment_title}. Review the question-level remarks and criteria to consolidate your learning."
-
-    if not strengths_text:
-        top_qs = [q for q in questions if float(q.get("awarded_marks", 0)) > 0]
-        if top_qs:
-            strengths_text = "\n".join([f"• Solid performance on Question {q.get('question_no')}" for q in top_qs[:2]] + ["• Clear handwriting and systematic working"])
-        else:
-            strengths_text = "• Good foundational effort attempted\n• Structured response format"
-
-    if not improvements_text:
-        lost_qs = [q for q in questions if float(q.get("awarded_marks", 0)) < float(q.get("max_marks", 0))]
-        if lost_qs:
-            improvements_text = "\n".join([f"• Review deduction criteria on Question {q.get('question_no')}" for q in lost_qs[:2]] + ["• Ensure all formula substitutions and units are clearly stated"])
-        else:
-            improvements_text = "• Maintain high precision and consistent presentation across all sections"
-
-    return {
-        "success": True,
-        "overall_feedback": overall,
-        "strengths_feedback": strengths_text,
-        "improvement_feedback": improvements_text,
-        "total_score": round(computed_awarded, 1),
-        "max_marks": computed_max,
-        "percentage": pct,
-        "grade_letter": grade
-    }
 
 def step2_mark_and_comment(
     assignment_info: Dict[str, Any],
@@ -1073,10 +1056,8 @@ def step2_mark_and_comment(
     reasoning_model: str = DEFAULT_TEXT_MODEL
 ) -> Dict[str, Any]:
     """
-    Step 2: Reasoning model evaluates the verified student handwriting question-by-question,
-    awards criteria marks, AND synthesizes personalized overall remarks, strengths, and improvements.
+    Step 2: Evaluates questions and synthesizes overall remarks, strengths, and improvements.
     """
-    # 1. Score questions
     mark_res = step1b_mark_extracted_questions(
         assignment_info=assignment_info,
         student_info=student_info,
@@ -1087,8 +1068,6 @@ def step2_mark_and_comment(
         return mark_res
         
     scored_questions = mark_res.get("questions", questions)
-    
-    # 2. Synthesize comments and feedback
     eval_res = step2_evaluate_and_comment(
         assignment_info=assignment_info,
         student_info=student_info,
@@ -1100,15 +1079,34 @@ def step2_mark_and_comment(
         "success": True,
         "step": 2,
         "questions": scored_questions,
+        "in_situ_remarks": mark_res.get("in_situ_remarks", []),
+        "student_edits": mark_res.get("student_edits", []),
         "total_score": mark_res["total_score"],
         "max_marks": mark_res["max_marks"],
         "percentage": mark_res["percentage"],
         "grade_letter": mark_res["grade_letter"],
-        "overall_feedback": eval_res.get("overall_feedback", ""),
-        "strengths_feedback": eval_res.get("strengths_feedback", ""),
-        "improvement_feedback": eval_res.get("improvement_feedback", ""),
+        "overall_feedback": eval_res.get("overall_feedback", "") or mark_res.get("overall_feedback", ""),
+        "strengths_feedback": eval_res.get("strengths_feedback", "") or mark_res.get("strengths_feedback", ""),
+        "improvement_feedback": eval_res.get("improvement_feedback", "") or mark_res.get("improvement_feedback", ""),
         "ai_model_used": reasoning_model
     }
+
+def grade_essay_submission_holistically(
+    assignment_info: Dict[str, Any],
+    student_info: Dict[str, Any],
+    pages: List[Dict[str, Any]],
+    vision_model: str = DEFAULT_VISION_MODEL,
+    reasoning_model: str = DEFAULT_TEXT_MODEL
+) -> Dict[str, Any]:
+    from app.markers.chinese_essay import ChineseEssayMarker
+    marker = ChineseEssayMarker()
+    return marker.grade_submission(
+        assignment_info=assignment_info,
+        student_info=student_info,
+        pages=pages,
+        vision_model=vision_model,
+        reasoning_model=reasoning_model
+    )
 
 def grade_student_submission(
     assignment_info: Dict[str, Any],
@@ -1120,31 +1118,20 @@ def grade_student_submission(
 ) -> Dict[str, Any]:
     """
     Do All (Full Auto Pipeline): Step 1 (Extract) -> Step 2 (Mark & Comment).
+    Delegates to the configured subject marker.
     """
     effective_reasoning = reasoning_model or DEFAULT_TEXT_MODEL
-    
-    # Step 1: Extract Text
-    extract_res = step1a_extract_student_responses_verbatim(
+    from app.markers.registry import get_marker
+    marker_type = assignment_info.get("marker_type")
+    marker = get_marker(marker_type, assignment_info.get("subject", ""), assignment_info.get("title", ""))
+    return marker.grade_submission(
         assignment_info=assignment_info,
         student_info=student_info,
         pages=pages,
-        vision_model=vision_model
+        vision_model=vision_model,
+        reasoning_model=effective_reasoning,
+        use_two_stage=use_two_stage
     )
-    if not extract_res.get("success"):
-        return extract_res
-        
-    # Step 2: Mark & Comment
-    step2_res = step2_mark_and_comment(
-        assignment_info=assignment_info,
-        student_info=student_info,
-        questions=extract_res["questions"],
-        reasoning_model=effective_reasoning
-    )
-    if not step2_res.get("success"):
-        return step2_res
-        
-    step2_res["ai_model_used"] = f"{vision_model} + {effective_reasoning}"
-    return step2_res
 
 def extract_student_identity_from_scan(
     pages: List[Dict[str, Any]],
@@ -1201,6 +1188,8 @@ def extract_student_identity_from_scan(
                     "Look at this student answer script or exam cover page. "
                     "Locate and transcribe the HANDWRITTEN student full name, handwritten student ID / candidate number, and class/grade name. "
                     "Disregard printed teacher names, school headers, or printed worksheet instructions. "
+                    "Carefully inspect the handwritten letters for the student name, especially joined or cursive handwriting (e.g., 'r', 's', 'sh', 'u', 'n', 'v'). "
+                    "Transcribe the name accurately as written. "
                     "Return ONLY JSON: {\"name\": \"...\", \"student_id\": \"...\", \"class_name\": \"...\"}. "
                     "If a field is not found, return empty string for that field."
                 )
@@ -1229,9 +1218,21 @@ def extract_student_identity_from_scan(
 
     if not inferred_name:
         inferred_name = "Student " + (inferred_id if inferred_id else "Script")
+        record_fallback(
+            source="Identity Extraction",
+            trigger="Student name could not be detected from scan or filename",
+            action="Generated default placeholder student name",
+            details=f"Assigned name: '{inferred_name}'"
+        )
     if not inferred_id:
         import time
         inferred_id = f"STU-{int(time.time()*1000) % 10000:04d}"
+        record_fallback(
+            source="Identity Extraction",
+            trigger="Candidate ID not detected on scan cover",
+            action="Generated temporary candidate ID",
+            details=f"Assigned ID: '{inferred_id}'"
+        )
 
     return {
         "name": inferred_name,

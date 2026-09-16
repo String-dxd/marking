@@ -10,6 +10,7 @@ from app.core import db
 from app.core.pdf_processor import process_scanned_document, reverse_pages_list, rotate_page_image, reorder_pages
 from app.core.marker_engine import grade_student_submission, extract_student_identity_from_scan
 from app.core.direct_marker import generate_direct_marking_annotations
+from app.core.fallback_tracker import FallbackContext
 
 router = APIRouter(prefix="/api/submissions", tags=["submissions"])
 
@@ -25,6 +26,7 @@ class GradeRequest(BaseModel):
     reasoning_model: Optional[str] = DEFAULT_TEXT_MODEL
     text_model: Optional[str] = None
     use_two_stage: Optional[bool] = True
+    marker_type: Optional[str] = None
 
 class StudentInfoUpdate(BaseModel):
     name: str
@@ -39,6 +41,8 @@ async def upload_submission(
     student_name: Optional[str] = Form(None),
     class_name: Optional[str] = Form(None),
     reverse_order: bool = Form(False),
+    trim_pages: Optional[str] = Form(None),
+    trim_last_page: bool = Form(False),
     file: UploadFile = File(...)
 ):
     assignment = db.get_assignment_by_id(assignment_id)
@@ -68,7 +72,13 @@ async def upload_submission(
     )
     
     # Process PDF / images into high-res pages & thumbnails
-    pages = process_scanned_document(str(save_path), submission_id=sub_id, reverse_order=reverse_order)
+    pages = process_scanned_document(
+        str(save_path),
+        submission_id=sub_id,
+        reverse_order=reverse_order,
+        trim_pages=trim_pages,
+        trim_last_page=trim_last_page
+    )
     
     # If student_name was not explicitly given, automatically parse student name/ID from the scan!
     if not student_name:
@@ -100,12 +110,15 @@ async def split_and_ingest_combined_scan(
     pages_per_student: int = Form(1),
     reverse_pages_per_student: bool = Form(False),
     reverse_entire_scan: bool = Form(False),
+    trim_pages: Optional[str] = Form(None),
+    trim_last_page: bool = Form(False),
     default_class: Optional[str] = Form(None),
     file: UploadFile = File(...)
 ):
     """
     Truncates a single combined multi-student PDF file into separate student submissions.
     Auto-extracts student names and checks if student is in the existing database.
+    Supports trimming blank or selected pages per student script (e.g. trimming the last page).
     """
     from app.core.pdf_processor import split_combined_pdf_into_student_docs, render_and_save_student_pages
     
@@ -126,7 +139,9 @@ async def split_and_ingest_combined_scan(
             combined_pdf_path=str(save_path),
             pages_per_student=max(1, pages_per_student),
             reverse_pages_per_student=reverse_pages_per_student,
-            reverse_entire_scan=reverse_entire_scan
+            reverse_entire_scan=reverse_entire_scan,
+            trim_pages=trim_pages,
+            trim_last_page=trim_last_page
         )
         
         created_submissions = []
@@ -156,6 +171,7 @@ async def split_and_ingest_combined_scan(
             
             # Check against existing students in database (only if recognized real name)
             match = db.find_matching_student(identity["name"], identity["student_id"])
+            is_new_student = True
             
             if match:
                 target_student_id = match["id"]
@@ -166,6 +182,7 @@ async def split_and_ingest_combined_scan(
                 identity["name"] = match["name"]
                 identity["student_id"] = match["student_id"]
                 identity["class_name"] = match["class_name"]
+                is_new_student = False
             else:
                 db.update_submission_student_info(
                     submission_id=sub_id,
@@ -242,12 +259,15 @@ def delete_submission_endpoint(submission_id: int):
 async def batch_upload_submissions(
     assignment_id: int = Form(...),
     reverse_order: bool = Form(False),
+    trim_pages: Optional[str] = Form(None),
+    trim_last_page: bool = Form(False),
     default_class: Optional[str] = Form(None),
     files: List[UploadFile] = File(...)
 ):
     """
     Batch uploads multiple student script files at once.
     Automatically parses student names, student IDs, and checks database match.
+    Supports trimming blank or selected pages per script.
     """
     assignment = db.get_assignment_by_id(assignment_id)
     if not assignment:
@@ -275,7 +295,13 @@ async def batch_upload_submissions(
             pages_json="[]"
         )
         
-        pages = process_scanned_document(str(save_path), submission_id=sub_id, reverse_order=reverse_order)
+        pages = process_scanned_document(
+            str(save_path),
+            submission_id=sub_id,
+            reverse_order=reverse_order,
+            trim_pages=trim_pages,
+            trim_last_page=trim_last_page
+        )
         identity = extract_student_identity_from_scan(pages, filename=file.filename, default_class=assign_class)
         
         match = db.find_matching_student(identity["name"], identity["student_id"])
@@ -404,12 +430,14 @@ from app.core.marker_engine import (
 )
 
 class Step1BRequest(BaseModel):
-    reasoning_model: Optional[str] = "qwen3.6:latest"
+    reasoning_model: Optional[str] = DEFAULT_TEXT_MODEL
     questions: Optional[List[Dict[str, Any]]] = None
+    marker_type: Optional[str] = None
 
 class Step2Request(BaseModel):
-    reasoning_model: Optional[str] = "qwen3.6:latest"
+    reasoning_model: Optional[str] = DEFAULT_TEXT_MODEL
     questions: Optional[List[Dict[str, Any]]] = None
+    marker_type: Optional[str] = None
 
 def _ensure_student_name_verified(submission_id: int, submission: Dict[str, Any], pages: List[Dict[str, Any]]):
     """Ensures student name is parsed from scan before generating remarks."""
@@ -454,7 +482,8 @@ def run_grade_step1a_extraction(submission_id: int, req: GradeRequest):
         "subject": submission.get("assignment_subject"),
         "max_marks": submission.get("assignment_max_marks"),
         "marking_scheme_text": submission.get("marking_scheme_text"),
-        "rubric_json": submission.get("assignment_rubric_json")
+        "rubric_json": submission.get("assignment_rubric_json"),
+        "marker_type": req.marker_type or submission.get("assignment_marker_type") or "auto"
     }
     student_info = {
         "name": submission.get("student_name"),
@@ -463,37 +492,43 @@ def run_grade_step1a_extraction(submission_id: int, req: GradeRequest):
     
     db.update_submission_status(submission_id, "marking")
     
-    result = step1a_extract_student_responses_verbatim(
-        assignment_info=assignment_info,
-        student_info=student_info,
-        pages=pages,
-        vision_model=req.vision_model or DEFAULT_VISION_MODEL
-    )
-    
-    if not result.get("success"):
-        db.update_submission_status(submission_id, "pending")
-        raise HTTPException(status_code=500, detail=result.get("error", "Extraction failed"))
+    with FallbackContext() as fb_ctx:
+        result = step1a_extract_student_responses_verbatim(
+            assignment_info=assignment_info,
+            student_info=student_info,
+            pages=pages,
+            vision_model=req.vision_model or DEFAULT_VISION_MODEL
+        )
         
-    # Save extracted questions (with awarded_marks=0) into DB
-    db.save_marking_results(
-        submission_id=submission_id,
-        total_score=0.0,
-        percentage=0.0,
-        grade_letter="--",
-        overall_feedback=submission.get("overall_feedback", ""),
-        strengths_feedback=submission.get("strengths_feedback", ""),
-        improvement_feedback=submission.get("improvement_feedback", ""),
-        ai_model=result["ai_model_used"],
-        questions=result["questions"],
-        auto_status="review_ready"
-    )
-    
-    return {
-        "success": True,
-        "step": "1A",
-        "message": f"Step 1A Complete: {len(result['questions'])} student responses extracted verbatim. Review the text, then click Step 1B to mark.",
-        "results": result
-    }
+        if not result.get("success"):
+            db.update_submission_status(submission_id, "pending")
+            raise HTTPException(status_code=500, detail=result.get("error", "Extraction failed"))
+            
+        # Save transcribed pages with physical line splits back to DB
+        db.update_submission_pages(submission_id, pages)
+
+        # Save extracted questions (with awarded_marks=0) into DB
+        db.save_marking_results(
+            submission_id=submission_id,
+            total_score=0.0,
+            percentage=0.0,
+            grade_letter="--",
+            overall_feedback=submission.get("overall_feedback", ""),
+            strengths_feedback=submission.get("strengths_feedback", ""),
+            improvement_feedback=submission.get("improvement_feedback", ""),
+            ai_model=result["ai_model_used"],
+            questions=result["questions"],
+            auto_status="review_ready"
+        )
+        
+        return {
+            "success": True,
+            "step": "1A",
+            "message": f"Step 1A Complete: {len(result['questions'])} student responses extracted verbatim. Review the text, then click Step 1B to mark.",
+            "results": result,
+            "fallback_triggered": fb_ctx.triggered,
+            "fallbacks": fb_ctx.fallbacks
+        }
 
 @router.post("/{submission_id}/grade-step1b")
 def run_grade_step1b_marking(submission_id: int, req: Step1BRequest):
@@ -513,11 +548,14 @@ def run_grade_step1b_marking(submission_id: int, req: Step1BRequest):
         raise HTTPException(status_code=400, detail="No student responses found. Please run Step 1A first.")
         
     assignment_info = {
+        "id": submission.get("assignment_id"),
+        "submission_id": submission_id,
         "title": submission.get("assignment_title"),
         "subject": submission.get("assignment_subject"),
         "max_marks": submission.get("assignment_max_marks"),
         "marking_scheme_text": submission.get("marking_scheme_text"),
-        "rubric_json": submission.get("assignment_rubric_json")
+        "rubric_json": submission.get("assignment_rubric_json"),
+        "marker_type": req.marker_type or submission.get("assignment_marker_type") or "auto"
     }
     student_info = {
         "name": submission.get("student_name"),
@@ -526,48 +564,55 @@ def run_grade_step1b_marking(submission_id: int, req: Step1BRequest):
     
     db.update_submission_status(submission_id, "marking")
     
-    result = step1b_mark_extracted_questions(
-        assignment_info=assignment_info,
-        student_info=student_info,
-        questions=questions,
-        reasoning_model=req.reasoning_model or DEFAULT_TEXT_MODEL
-    )
-    
-    if not result.get("success"):
-        db.update_submission_status(submission_id, "pending")
-        raise HTTPException(status_code=500, detail=result.get("error", "Question marking failed"))
+    with FallbackContext() as fb_ctx:
+        result = step1b_mark_extracted_questions(
+            assignment_info=assignment_info,
+            student_info=student_info,
+            questions=questions,
+            reasoning_model=req.reasoning_model or DEFAULT_TEXT_MODEL
+        )
         
-    eval_res = step2_evaluate_and_comment(
-        assignment_info=assignment_info,
-        student_info=student_info,
-        questions=result["questions"],
-        reasoning_model=req.reasoning_model or DEFAULT_TEXT_MODEL
-    )
-    
-    db.save_marking_results(
-        submission_id=submission_id,
-        total_score=result["total_score"],
-        percentage=result["percentage"],
-        grade_letter=result["grade_letter"],
-        overall_feedback=eval_res.get("overall_feedback", ""),
-        strengths_feedback=eval_res.get("strengths_feedback", ""),
-        improvement_feedback=eval_res.get("improvement_feedback", ""),
-        ai_model=result["ai_model_used"],
-        questions=result["questions"],
-        auto_status="review_ready"
-    )
-    
-    return {
-        "success": True,
-        "step": "1B",
-        "message": f"Step 1B Complete: Questions marked ({result['total_score']} / {result['max_marks']}) and feedback generated.",
-        "results": {
-            **result,
-            "overall_feedback": eval_res.get("overall_feedback", ""),
-            "strengths_feedback": eval_res.get("strengths_feedback", ""),
-            "improvement_feedback": eval_res.get("improvement_feedback", "")
+        if not result.get("success"):
+            db.update_submission_status(submission_id, "pending")
+            raise HTTPException(status_code=500, detail=result.get("error", "Question marking failed"))
+            
+        eval_res = step2_evaluate_and_comment(
+            assignment_info=assignment_info,
+            student_info=student_info,
+            questions=result["questions"],
+            reasoning_model=req.reasoning_model or DEFAULT_TEXT_MODEL
+        )
+        
+        db.save_marking_results(
+            submission_id=submission_id,
+            total_score=result["total_score"],
+            percentage=result["percentage"],
+            grade_letter=result["grade_letter"],
+            overall_feedback=eval_res.get("overall_feedback", "") or result.get("overall_feedback", ""),
+            strengths_feedback=eval_res.get("strengths_feedback", "") or result.get("strengths_feedback", ""),
+            improvement_feedback=eval_res.get("improvement_feedback", "") or result.get("improvement_feedback", ""),
+            ai_model=result["ai_model_used"],
+            questions=result["questions"],
+            auto_status="review_ready"
+        )
+        if result.get("in_situ_remarks"):
+            db.update_submission_annotations(submission_id, result["in_situ_remarks"])
+        if result.get("student_edits"):
+            db.update_submission_student_edits(submission_id, result["student_edits"])
+        
+        return {
+            "success": True,
+            "step": "1B",
+            "message": f"Step 1B Complete: Questions marked ({result['total_score']} / {result['max_marks']}) and feedback generated.",
+            "results": {
+                **result,
+                "overall_feedback": eval_res.get("overall_feedback", "") or result.get("overall_feedback", ""),
+                "strengths_feedback": eval_res.get("strengths_feedback", "") or result.get("strengths_feedback", ""),
+                "improvement_feedback": eval_res.get("improvement_feedback", "") or result.get("improvement_feedback", "")
+            },
+            "fallback_triggered": fb_ctx.triggered,
+            "fallbacks": fb_ctx.fallbacks
         }
-    }
 
 @router.post("/{submission_id}/mark-and-comment")
 def run_mark_and_comment(submission_id: int, req: Step1BRequest):
@@ -588,11 +633,14 @@ def run_mark_and_comment(submission_id: int, req: Step1BRequest):
         raise HTTPException(status_code=400, detail="No extracted student responses found. Please run Step 1 (Extract) first.")
         
     assignment_info = {
+        "id": submission.get("assignment_id"),
+        "submission_id": submission_id,
         "title": submission.get("assignment_title"),
         "subject": submission.get("assignment_subject"),
         "max_marks": submission.get("assignment_max_marks"),
         "marking_scheme_text": submission.get("marking_scheme_text"),
-        "rubric_json": submission.get("assignment_rubric_json")
+        "rubric_json": submission.get("assignment_rubric_json"),
+        "marker_type": req.marker_type or submission.get("assignment_marker_type") or "auto"
     }
     student_info = {
         "name": submission.get("student_name"),
@@ -601,36 +649,43 @@ def run_mark_and_comment(submission_id: int, req: Step1BRequest):
     
     db.update_submission_status(submission_id, "marking")
     
-    result = step2_mark_and_comment(
-        assignment_info=assignment_info,
-        student_info=student_info,
-        questions=questions,
-        reasoning_model=req.reasoning_model or DEFAULT_TEXT_MODEL
-    )
-    
-    if not result.get("success"):
-        db.update_submission_status(submission_id, "pending")
-        raise HTTPException(status_code=500, detail=result.get("error", "Marking and comment synthesis failed"))
+    with FallbackContext() as fb_ctx:
+        result = step2_mark_and_comment(
+            assignment_info=assignment_info,
+            student_info=student_info,
+            questions=questions,
+            reasoning_model=req.reasoning_model or DEFAULT_TEXT_MODEL
+        )
         
-    db.save_marking_results(
-        submission_id=submission_id,
-        total_score=result["total_score"],
-        percentage=result["percentage"],
-        grade_letter=result["grade_letter"],
-        overall_feedback=result["overall_feedback"],
-        strengths_feedback=result["strengths_feedback"],
-        improvement_feedback=result["improvement_feedback"],
-        ai_model=result["ai_model_used"],
-        questions=result["questions"],
-        auto_status="review_ready"
-    )
-    
-    return {
-        "success": True,
-        "step": 2,
-        "message": f"Step 2 Complete: Questions marked ({result['total_score']} / {result['max_marks']}) and personalized remarks generated.",
-        "results": result
-    }
+        if not result.get("success"):
+            db.update_submission_status(submission_id, "pending")
+            raise HTTPException(status_code=500, detail=result.get("error", "Marking and comment synthesis failed"))
+            
+        db.save_marking_results(
+            submission_id=submission_id,
+            total_score=result["total_score"],
+            percentage=result["percentage"],
+            grade_letter=result["grade_letter"],
+            overall_feedback=result["overall_feedback"],
+            strengths_feedback=result["strengths_feedback"],
+            improvement_feedback=result["improvement_feedback"],
+            ai_model=result["ai_model_used"],
+            questions=result["questions"],
+            auto_status="review_ready"
+        )
+        if result.get("in_situ_remarks"):
+            db.update_submission_annotations(submission_id, result["in_situ_remarks"])
+        if result.get("student_edits"):
+            db.update_submission_student_edits(submission_id, result["student_edits"])
+        
+        return {
+            "success": True,
+            "step": 2,
+            "message": f"Step 2 Complete: Questions marked ({result['total_score']} / {result['max_marks']}) and personalized remarks generated.",
+            "results": result,
+            "fallback_triggered": fb_ctx.triggered,
+            "fallbacks": fb_ctx.fallbacks
+        }
 
 @router.post("/{submission_id}/grade-step1")
 def run_grade_step1(submission_id: int, req: GradeRequest):
@@ -652,7 +707,8 @@ def run_grade_step1(submission_id: int, req: GradeRequest):
         "subject": submission.get("assignment_subject"),
         "max_marks": submission.get("assignment_max_marks"),
         "marking_scheme_text": submission.get("marking_scheme_text"),
-        "rubric_json": submission.get("assignment_rubric_json")
+        "rubric_json": submission.get("assignment_rubric_json"),
+        "marker_type": req.marker_type or submission.get("assignment_marker_type") or "auto"
     }
     student_info = {
         "name": submission.get("student_name"),
@@ -661,50 +717,53 @@ def run_grade_step1(submission_id: int, req: GradeRequest):
     
     db.update_submission_status(submission_id, "marking")
     
-    result = step1_mark_questions_by_parts(
-        assignment_info=assignment_info,
-        student_info=student_info,
-        pages=pages,
-        vision_model=req.vision_model or DEFAULT_VISION_MODEL,
-        reasoning_model=req.reasoning_model or req.text_model or DEFAULT_TEXT_MODEL,
-        use_two_stage=req.use_two_stage if req.use_two_stage is not None else True
-    )
-    
-    if not result.get("success"):
-        db.update_submission_status(submission_id, "pending")
-        raise HTTPException(status_code=500, detail=result.get("error", "Question marking failed"))
+    with FallbackContext() as fb_ctx:
+        result = step1_mark_questions_by_parts(
+            assignment_info=assignment_info,
+            student_info=student_info,
+            pages=pages,
+            vision_model=req.vision_model or DEFAULT_VISION_MODEL,
+            reasoning_model=req.reasoning_model or req.text_model or DEFAULT_TEXT_MODEL,
+            use_two_stage=req.use_two_stage if req.use_two_stage is not None else True
+        )
         
-    eval_res = step2_evaluate_and_comment(
-        assignment_info=assignment_info,
-        student_info=student_info,
-        questions=result["questions"],
-        reasoning_model=req.reasoning_model or req.text_model or DEFAULT_TEXT_MODEL
-    )
-    
-    db.save_marking_results(
-        submission_id=submission_id,
-        total_score=result["total_score"],
-        percentage=result["percentage"],
-        grade_letter=result["grade_letter"],
-        overall_feedback=eval_res.get("overall_feedback", ""),
-        strengths_feedback=eval_res.get("strengths_feedback", ""),
-        improvement_feedback=eval_res.get("improvement_feedback", ""),
-        ai_model=result["ai_model_used"],
-        questions=result["questions"],
-        auto_status="review_ready"
-    )
-    
-    return {
-        "success": True,
-        "step": 1,
-        "message": f"Step 1 Complete: {len(result['questions'])} questions marked and feedback generated.",
-        "results": {
-            **result,
-            "overall_feedback": eval_res.get("overall_feedback", ""),
-            "strengths_feedback": eval_res.get("strengths_feedback", ""),
-            "improvement_feedback": eval_res.get("improvement_feedback", "")
+        if not result.get("success"):
+            db.update_submission_status(submission_id, "pending")
+            raise HTTPException(status_code=500, detail=result.get("error", "Question marking failed"))
+            
+        eval_res = step2_evaluate_and_comment(
+            assignment_info=assignment_info,
+            student_info=student_info,
+            questions=result["questions"],
+            reasoning_model=req.reasoning_model or req.text_model or DEFAULT_TEXT_MODEL
+        )
+        
+        db.save_marking_results(
+            submission_id=submission_id,
+            total_score=result["total_score"],
+            percentage=result["percentage"],
+            grade_letter=result["grade_letter"],
+            overall_feedback=eval_res.get("overall_feedback", ""),
+            strengths_feedback=eval_res.get("strengths_feedback", ""),
+            improvement_feedback=eval_res.get("improvement_feedback", ""),
+            ai_model=result["ai_model_used"],
+            questions=result["questions"],
+            auto_status="review_ready"
+        )
+        
+        return {
+            "success": True,
+            "step": 1,
+            "message": f"Step 1 Complete: {len(result['questions'])} questions marked and feedback generated.",
+            "results": {
+                **result,
+                "overall_feedback": eval_res.get("overall_feedback", ""),
+                "strengths_feedback": eval_res.get("strengths_feedback", ""),
+                "improvement_feedback": eval_res.get("improvement_feedback", "")
+            },
+            "fallback_triggered": fb_ctx.triggered,
+            "fallbacks": fb_ctx.fallbacks
         }
-    }
 
 @router.post("/{submission_id}/grade-step2")
 def run_grade_step2(submission_id: int, req: Step2Request):
@@ -726,40 +785,44 @@ def run_grade_step2(submission_id: int, req: Step2Request):
     assignment_info = {
         "title": submission.get("assignment_title"),
         "subject": submission.get("assignment_subject"),
-        "max_marks": submission.get("assignment_max_marks")
+        "max_marks": submission.get("assignment_max_marks"),
+        "marker_type": req.marker_type or submission.get("assignment_marker_type") or "auto"
     }
     student_info = {
         "name": submission.get("student_name"),
         "student_id": submission.get("student_code")
     }
     
-    result = step2_evaluate_and_comment(
-        assignment_info=assignment_info,
-        student_info=student_info,
-        questions=questions,
-        reasoning_model=req.reasoning_model or DEFAULT_TEXT_MODEL
-    )
-    
-    # Update DB with feedback and latest question scores
-    db.save_marking_results(
-        submission_id=submission_id,
-        total_score=result["total_score"],
-        percentage=result["percentage"],
-        grade_letter=result["grade_letter"],
-        overall_feedback=result["overall_feedback"],
-        strengths_feedback=result["strengths_feedback"],
-        improvement_feedback=result["improvement_feedback"],
-        ai_model=submission.get("ai_model_used", ""),
-        questions=questions,
-        auto_status="review_ready"
-    )
-    
-    return {
-        "success": True,
-        "step": 2,
-        "message": "Step 2 Complete: Personalized remarks and evaluation synthesized.",
-        "results": result
-    }
+    with FallbackContext() as fb_ctx:
+        result = step2_evaluate_and_comment(
+            assignment_info=assignment_info,
+            student_info=student_info,
+            questions=questions,
+            reasoning_model=req.reasoning_model or DEFAULT_TEXT_MODEL
+        )
+        
+        # Update DB with feedback and latest question scores
+        db.save_marking_results(
+            submission_id=submission_id,
+            total_score=result["total_score"],
+            percentage=result["percentage"],
+            grade_letter=result["grade_letter"],
+            overall_feedback=result["overall_feedback"],
+            strengths_feedback=result["strengths_feedback"],
+            improvement_feedback=result["improvement_feedback"],
+            ai_model=submission.get("ai_model_used", ""),
+            questions=questions,
+            auto_status="review_ready"
+        )
+        
+        return {
+            "success": True,
+            "step": 2,
+            "message": "Step 2 Complete: Personalized remarks and evaluation synthesized.",
+            "results": result,
+            "fallback_triggered": fb_ctx.triggered,
+            "fallbacks": fb_ctx.fallbacks
+        }
 
 @router.post("/{submission_id}/grade")
 def run_ai_grading(submission_id: int, req: GradeRequest):
@@ -780,7 +843,8 @@ def run_ai_grading(submission_id: int, req: GradeRequest):
         "subject": submission.get("assignment_subject"),
         "max_marks": submission.get("assignment_max_marks"),
         "marking_scheme_text": submission.get("marking_scheme_text"),
-        "rubric_json": submission.get("assignment_rubric_json")
+        "rubric_json": submission.get("assignment_rubric_json"),
+        "marker_type": req.marker_type or submission.get("assignment_marker_type") or "auto"
     }
     
     student_info = {
@@ -790,37 +854,40 @@ def run_ai_grading(submission_id: int, req: GradeRequest):
     
     db.update_submission_status(submission_id, "marking")
     
-    result = grade_student_submission(
-        assignment_info=assignment_info,
-        student_info=student_info,
-        pages=pages,
-        vision_model=req.vision_model or DEFAULT_VISION_MODEL,
-        reasoning_model=req.reasoning_model or req.text_model or DEFAULT_TEXT_MODEL,
-        use_two_stage=req.use_two_stage if req.use_two_stage is not None else True
-    )
-    
-    if not result.get("success"):
-        db.update_submission_status(submission_id, "pending")
-        raise HTTPException(status_code=500, detail=result.get("error", "AI marking failed"))
+    with FallbackContext() as fb_ctx:
+        result = grade_student_submission(
+            assignment_info=assignment_info,
+            student_info=student_info,
+            pages=pages,
+            vision_model=req.vision_model or DEFAULT_VISION_MODEL,
+            reasoning_model=req.reasoning_model or req.text_model or DEFAULT_TEXT_MODEL,
+            use_two_stage=req.use_two_stage if req.use_two_stage is not None else True
+        )
         
-    db.save_marking_results(
-        submission_id=submission_id,
-        total_score=result["total_score"],
-        percentage=result["percentage"],
-        grade_letter=result["grade_letter"],
-        overall_feedback=result["overall_feedback"],
-        strengths_feedback=result["strengths_feedback"],
-        improvement_feedback=result["improvement_feedback"],
-        ai_model=result["ai_model_used"],
-        questions=result["questions"],
-        auto_status="review_ready"
-    )
-    
-    return {
-        "success": True,
-        "message": "AI grading completed. Ready for teacher review & approval.",
-        "results": result
-    }
+        if not result.get("success"):
+            db.update_submission_status(submission_id, "pending")
+            raise HTTPException(status_code=500, detail=result.get("error", "AI marking failed"))
+            
+        db.save_marking_results(
+            submission_id=submission_id,
+            total_score=result["total_score"],
+            percentage=result["percentage"],
+            grade_letter=result["grade_letter"],
+            overall_feedback=result["overall_feedback"],
+            strengths_feedback=result["strengths_feedback"],
+            improvement_feedback=result["improvement_feedback"],
+            ai_model=result["ai_model_used"],
+            questions=result["questions"],
+            auto_status="review_ready"
+        )
+        
+        return {
+            "success": True,
+            "message": "AI grading completed. Ready for teacher review & approval.",
+            "results": result,
+            "fallback_triggered": fb_ctx.triggered,
+            "fallbacks": fb_ctx.fallbacks
+        }
 
 @router.get("/assignment/{assignment_id}")
 def get_assignment_submissions(assignment_id: int):
@@ -853,25 +920,323 @@ def clear_submission_annotations_endpoint(submission_id: int):
     db.update_submission_annotations(submission_id, [])
     return {"success": True, "message": "Direct markings cleared successfully.", "annotations": []}
 
-@router.post("/{submission_id}/direct-mark")
-def run_direct_marking_endpoint(submission_id: int, vision_model: Optional[str] = DEFAULT_VISION_MODEL):
+@router.get("/{submission_id}/student-edits")
+def get_submission_student_edits_endpoint(submission_id: int):
     submission = db.get_submission_by_id(submission_id)
     if not submission:
         raise HTTPException(status_code=404, detail="Submission not found")
+    edits = submission.get("student_edits") or db.get_submission_student_edits(submission_id)
+    return {"success": True, "submission_id": submission_id, "student_edits": edits}
+
+class DirectMarkRequest(BaseModel):
+    vision_model: Optional[str] = DEFAULT_VISION_MODEL
+    marker_type: Optional[str] = None
+    use_benchmark_mock: Optional[bool] = False
+
+@router.post("/{submission_id}/direct-mark")
+def run_direct_marking_endpoint(
+    submission_id: int,
+    req: Optional[DirectMarkRequest] = None,
+    vision_model: Optional[str] = DEFAULT_VISION_MODEL,
+    marker_type: Optional[str] = None
+):
+    try:
+        submission = db.get_submission_by_id(submission_id)
+        if not submission:
+            raise HTTPException(status_code=404, detail="Submission not found")
+        pages = json.loads(submission.get("pages_json") or "[]")
+        if not pages:
+            raise HTTPException(status_code=400, detail="Submission has no scanned pages.")
+        
+        # Ensure clear marking first before carrying out new direct marking
+        db.clear_submission_markings(submission_id)
+        submission["annotations"] = []
+        submission["student_edits"] = []
+
+        eff_model = (req.vision_model if req and req.vision_model else vision_model) or DEFAULT_VISION_MODEL
+        eff_marker = (req.marker_type if req and req.marker_type else marker_type) or submission.get("assignment_marker_type") or "auto"
+        submission["marker_type"] = eff_marker
+        use_mock = bool(req.use_benchmark_mock if req and req.use_benchmark_mock is not None else False)
+
+        with FallbackContext() as fb_ctx:
+            annotations = generate_direct_marking_annotations(
+                submission=submission,
+                pages=pages,
+                model=eff_model,
+                use_benchmark_mock=use_mock
+            )
+            student_edits = db.get_submission_student_edits(submission_id)
+            return {
+                "success": True,
+                "submission_id": submission_id,
+                "marker_used": eff_marker,
+                "message": f"Direct marking complete ({len(annotations)} annotations generated).",
+                "annotations": annotations,
+                "student_edits": student_edits,
+                "direct_marking_pdf_url": f"/api/reports/{submission_id}/direct-marking-pdf",
+                "fallback_triggered": fb_ctx.triggered,
+                "fallbacks": fb_ctx.fallbacks
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Direct marking failed: {str(e)}")
+
+class PipelineRequest(BaseModel):
+    vision_model: Optional[str] = DEFAULT_VISION_MODEL
+    reasoning_model: Optional[str] = DEFAULT_TEXT_MODEL
+    marker_type: Optional[str] = None
+    force_steps: Optional[List[str]] = []
+
+@router.post("/{submission_id}/run-pipeline")
+def run_three_step_pipeline_endpoint(
+    submission_id: int,
+    req: Optional[PipelineRequest] = None
+):
+    """
+    Runs unprocessed work through the 3-step pipeline:
+      Step 1: Vision AI extracts handwritten responses verbatim.
+      Step 2: Reasoning AI scores against rubrics & synthesizes feedback remarks.
+      Step 3: Direct Visual Marking overlays ticks, crosses, and remarks onto script.
+    
+    If any step(s) are already completed, they are skipped automatically.
+    """
+    submission = db.get_submission_by_id(submission_id)
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+        
     pages = json.loads(submission.get("pages_json") or "[]")
     if not pages:
         raise HTTPException(status_code=400, detail="Submission has no scanned pages.")
+        
+    _ensure_student_name_verified(submission_id, submission, pages)
+    submission = db.get_submission_by_id(submission_id)
     
-    annotations = generate_direct_marking_annotations(
-        submission=submission,
-        pages=pages,
-        model=vision_model or DEFAULT_VISION_MODEL
+    eff_vision = (req.vision_model if req and req.vision_model else None) or DEFAULT_VISION_MODEL
+    eff_reasoning = (req.reasoning_model if req and req.reasoning_model else None) or DEFAULT_TEXT_MODEL
+    eff_marker = (req.marker_type if req and req.marker_type else None) or submission.get("assignment_marker_type") or "auto"
+    force_steps = (req.force_steps if req and req.force_steps else [])
+    if "all" in force_steps:
+        force_steps = ["step1", "step2", "step3"]
+
+    assignment_info = {
+        "id": submission.get("assignment_id"),
+        "submission_id": submission_id,
+        "title": submission.get("assignment_title"),
+        "subject": submission.get("assignment_subject"),
+        "max_marks": submission.get("assignment_max_marks"),
+        "marking_scheme_text": submission.get("marking_scheme_text"),
+        "rubric_json": submission.get("assignment_rubric_json"),
+        "marker_type": eff_marker
+    }
+    student_info = {
+        "name": submission.get("student_name"),
+        "student_id": submission.get("student_code")
+    }
+
+    # Detect whether each step is already done
+    q_grades = submission.get("question_grades") or []
+    step1_done = bool(len(q_grades) > 0 and any(bool((q.get("extracted_answer") or "").strip()) for q in q_grades))
+    step2_done = bool((submission.get("overall_feedback") or "").strip() and submission.get("grade_letter", "--") != "--")
+    step3_done = bool(submission.get("annotations") and len(submission["annotations"]) > 0)
+
+    # Cascading force: if step1 is forced, step2 & step3 must re-run; if step2 is forced, step3 must re-run
+    if "step1" in force_steps:
+        step1_done = False
+        step2_done = False
+        step3_done = False
+    elif "step2" in force_steps:
+        step2_done = False
+        step3_done = False
+    elif "step3" in force_steps:
+        step3_done = False
+
+    steps_skipped = []
+    steps_executed = []
+
+    with FallbackContext() as fb_ctx:
+        questions = q_grades
+
+        # ---- STEP 1: VERBATIM EXTRACTION ----
+        if step1_done:
+            steps_skipped.append("step1")
+        else:
+            db.update_submission_status(submission_id, "marking")
+            extract_res = step1a_extract_student_responses_verbatim(
+                assignment_info=assignment_info,
+                student_info=student_info,
+                pages=pages,
+                vision_model=eff_vision
+            )
+            if not extract_res.get("success"):
+                db.update_submission_status(submission_id, "pending")
+                raise HTTPException(status_code=500, detail=extract_res.get("error", "Step 1 extraction failed"))
+            
+            questions = extract_res.get("questions") or []
+            db.update_submission_pages(submission_id, pages)
+            db.save_marking_results(
+                submission_id=submission_id,
+                total_score=0.0,
+                percentage=0.0,
+                grade_letter="--",
+                overall_feedback=submission.get("overall_feedback", ""),
+                strengths_feedback=submission.get("strengths_feedback", ""),
+                improvement_feedback=submission.get("improvement_feedback", ""),
+                ai_model=extract_res.get("ai_model_used", ""),
+                questions=questions,
+                auto_status="review_ready"
+            )
+            steps_executed.append("step1")
+
+        # ---- STEP 2: MARK & COMMENT ----
+        if step2_done:
+            steps_skipped.append("step2")
+        else:
+            db.update_submission_status(submission_id, "marking")
+            mark_res = step2_mark_and_comment(
+                assignment_info=assignment_info,
+                student_info=student_info,
+                questions=questions,
+                reasoning_model=eff_reasoning
+            )
+            if not mark_res.get("success"):
+                db.update_submission_status(submission_id, "pending")
+                raise HTTPException(status_code=500, detail=mark_res.get("error", "Step 2 marking failed"))
+
+            questions = mark_res.get("questions") or questions
+            db.save_marking_results(
+                submission_id=submission_id,
+                total_score=mark_res["total_score"],
+                percentage=mark_res["percentage"],
+                grade_letter=mark_res["grade_letter"],
+                overall_feedback=mark_res["overall_feedback"],
+                strengths_feedback=mark_res["strengths_feedback"],
+                improvement_feedback=mark_res["improvement_feedback"],
+                ai_model=submission.get("ai_model_used", ""),
+                questions=questions,
+                auto_status="review_ready"
+            )
+            if mark_res.get("in_situ_remarks"):
+                db.update_submission_annotations(submission_id, mark_res["in_situ_remarks"])
+            if mark_res.get("student_edits"):
+                db.update_submission_student_edits(submission_id, mark_res["student_edits"])
+            steps_executed.append("step2")
+
+        # ---- STEP 3: DIRECT VISUAL MARKING ----
+        if step3_done:
+            steps_skipped.append("step3")
+        else:
+            # Ensure clear marking first before carrying out new direct marking
+            db.clear_submission_markings(submission_id)
+            updated_sub = db.get_submission_by_id(submission_id)
+            updated_sub["annotations"] = []
+            updated_sub["student_edits"] = []
+            updated_sub["marker_type"] = eff_marker
+            sub_pages = json.loads(updated_sub.get("pages_json") or "[]") or pages
+            generate_direct_marking_annotations(
+                submission=updated_sub,
+                pages=sub_pages,
+                model=eff_vision,
+                use_benchmark_mock=False
+            )
+            steps_executed.append("step3")
+
+        final_sub = db.get_submission_by_id(submission_id)
+        all_already_done = bool(len(steps_executed) == 0 and len(steps_skipped) > 0)
+        return {
+            "success": True,
+            "submission_id": submission_id,
+            "student_name": final_sub.get("student_name"),
+            "steps_skipped": steps_skipped,
+            "steps_executed": steps_executed,
+            "all_already_done": all_already_done,
+            "step1_done": final_sub.get("step1_done", True),
+            "step2_done": final_sub.get("step2_done", True),
+            "step3_done": final_sub.get("step3_done", True),
+            "total_score": final_sub.get("total_score"),
+            "percentage": final_sub.get("percentage"),
+            "grade_letter": final_sub.get("grade_letter"),
+            "annotations_count": len(final_sub.get("annotations") or []),
+            "message": f"Pipeline finished: executed {steps_executed}, skipped {steps_skipped}.",
+            "fallback_triggered": fb_ctx.triggered,
+            "fallbacks": fb_ctx.fallbacks
+        }
+
+class BatchPipelineRequest(BaseModel):
+    submission_ids: Optional[List[int]] = None
+    assignment_id: Optional[int] = None
+    vision_model: Optional[str] = DEFAULT_VISION_MODEL
+    reasoning_model: Optional[str] = DEFAULT_TEXT_MODEL
+    marker_type: Optional[str] = None
+    force_steps: Optional[List[str]] = []
+    include_approved: Optional[bool] = False
+
+@router.post("/batch-pipeline")
+def run_batch_pipeline_endpoint(req: Optional[BatchPipelineRequest] = None):
+    """
+    Runs a list of submissions (or all pending submissions for an assignment or all classes)
+    through the 3-step pipeline, skipping completed steps for each submission (unless forced).
+    """
+    target_ids = (req.submission_ids if req else None) or []
+    force_steps = (req.force_steps if req and req.force_steps else [])
+    include_approved = bool(req.include_approved if req and req.include_approved is not None else (len(force_steps) > 0))
+
+    if not target_ids and req and req.assignment_id:
+        subs = db.get_submissions_by_assignment(req.assignment_id)
+        if include_approved:
+            target_ids = [s["id"] for s in subs]
+        else:
+            target_ids = [s["id"] for s in subs if s.get("status") != "approved"]
+    
+    if not target_ids:
+        # Fetch across all assignments
+        assignments = db.get_all_assignments()
+        for a in assignments:
+            subs = db.get_submissions_by_assignment(a["id"])
+            for s in subs:
+                if include_approved or s.get("status") != "approved":
+                    target_ids.append(s["id"])
+
+    results = []
+    pipe_req = PipelineRequest(
+        vision_model=req.vision_model if req else DEFAULT_VISION_MODEL,
+        reasoning_model=req.reasoning_model if req else DEFAULT_TEXT_MODEL,
+        marker_type=req.marker_type if req else None,
+        force_steps=force_steps
     )
+
+    for sid in target_ids:
+        try:
+            sub = db.get_submission_by_id(sid)
+            if not sub:
+                continue
+            if not force_steps and sub.get("is_pipeline_complete"):
+                results.append({
+                    "submission_id": sid,
+                    "student_name": sub.get("student_name"),
+                    "success": True,
+                    "steps_skipped": ["step1", "step2", "step3"],
+                    "steps_executed": [],
+                    "message": "All steps already completed."
+                })
+                continue
+            
+            res = run_three_step_pipeline_endpoint(sid, pipe_req)
+            results.append(res)
+            # Brief pause to allow local GPU VRAM deallocation and Ollama context stabilization
+            time.sleep(1.0)
+        except Exception as e:
+            results.append({
+                "submission_id": sid,
+                "success": False,
+                "error": str(e)
+            })
+
     return {
         "success": True,
-        "submission_id": submission_id,
-        "message": f"Direct marking complete ({len(annotations)} annotations generated).",
-        "annotations": annotations,
-        "direct_marking_pdf_url": f"/api/reports/{submission_id}/direct-marking-pdf"
+        "total": len(target_ids),
+        "results": results
     }
 

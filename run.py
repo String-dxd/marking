@@ -25,6 +25,11 @@ def open_browser():
     webbrowser.open(url)
 
 def main():
+    if "--desktop" in sys.argv or "-d" in sys.argv:
+        from tallus_desktop import main as desktop_main
+        desktop_main()
+        return
+
     enable_tunnel = "--tunnel" in sys.argv or "-t" in sys.argv or os.environ.get("ENABLE_TUNNEL") == "1"
     
     print("=" * 60)

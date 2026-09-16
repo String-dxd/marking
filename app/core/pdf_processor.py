@@ -8,11 +8,57 @@ from PIL import Image
 import pymupdf
 from app.core.config import PROCESSED_DIR
 
-def process_scanned_document(file_path: str, submission_id: int, reverse_order: bool = False) -> List[Dict[str, Any]]:
+def parse_trim_pages(trim_pages: Any = None, trim_last_page: bool = False, chunk_size: int = 1) -> set:
+    """
+    Parses trim options and returns a set of 1-based page indices to trim.
+    Supports comma-separated strings (e.g., '2,4', '4', 'last'), lists, sets, and JSON arrays.
+    """
+    to_trim = set()
+    if trim_last_page and chunk_size > 1:
+        to_trim.add(chunk_size)
+        
+    if trim_pages:
+        if isinstance(trim_pages, str):
+            raw = trim_pages.strip()
+            if raw.startswith("[") and raw.endswith("]"):
+                try:
+                    parsed = json.loads(raw)
+                    for item in parsed:
+                        if isinstance(item, int):
+                            to_trim.add(item)
+                        elif str(item).lower() == "last":
+                            to_trim.add(chunk_size)
+                except Exception:
+                    pass
+            else:
+                for part in raw.replace(";", ",").split(","):
+                    p = part.strip()
+                    if not p:
+                        continue
+                    if p.lower() == "last":
+                        to_trim.add(chunk_size)
+                    elif p.isdigit():
+                        to_trim.add(int(p))
+        elif isinstance(trim_pages, (list, tuple, set)):
+            for item in trim_pages:
+                if isinstance(item, int):
+                    to_trim.add(item)
+                elif str(item).lower() == "last":
+                    to_trim.add(chunk_size)
+    return to_trim
+
+def process_scanned_document(
+    file_path: str,
+    submission_id: int,
+    reverse_order: bool = False,
+    trim_pages: Optional[Any] = None,
+    trim_last_page: bool = False
+) -> List[Dict[str, Any]]:
     """
     Takes a PDF or image file, renders each page into a high-res image and thumbnail,
     and returns a structured list of page metadata.
     Supports reverse order for scans that came out backwards from the document feeder.
+    Supports trimming blank or selected pages.
     """
     path = Path(file_path)
     output_dir = PROCESSED_DIR / f"sub_{submission_id}"
@@ -26,6 +72,13 @@ def process_scanned_document(file_path: str, submission_id: int, reverse_order: 
         page_indices = list(range(num_pages))
         if reverse_order:
             page_indices.reverse()
+            
+        orig_len = len(page_indices)
+        pages_to_trim = parse_trim_pages(trim_pages, trim_last_page=trim_last_page, chunk_size=orig_len)
+        if pages_to_trim:
+            filtered = [idx for pos_1based, idx in enumerate(page_indices, start=1) if pos_1based not in pages_to_trim]
+            if filtered:
+                page_indices = filtered
             
         for display_idx, orig_page_num in enumerate(page_indices, start=1):
             page = doc.load_page(orig_page_num)
@@ -150,11 +203,14 @@ def split_combined_pdf_into_student_docs(
     combined_pdf_path: str,
     pages_per_student: int = 1,
     reverse_pages_per_student: bool = False,
-    reverse_entire_scan: bool = False
+    reverse_entire_scan: bool = False,
+    trim_pages: Optional[Any] = None,
+    trim_last_page: bool = False
 ) -> List[Dict[str, Any]]:
     """
     Splits a multi-student combined PDF file into individual student chunks.
     Supports reversing order within each student document, as well as reversing the whole batch.
+    Supports trimming blank or selected pages (e.g. trimming the last page of each student booklet).
     """
     if not Path(combined_pdf_path).exists():
         raise FileNotFoundError(f"File not found: {combined_pdf_path}")
@@ -180,10 +236,23 @@ def split_combined_pdf_into_student_docs(
         if reverse_pages_per_student:
             chunk_indices = list(reversed(chunk_indices))
             
+        chunk_len = len(chunk_indices)
+        pages_to_trim = parse_trim_pages(trim_pages, trim_last_page=trim_last_page, chunk_size=chunk_len)
+        
+        filtered_indices = [
+            idx for pos_1based, idx in enumerate(chunk_indices, start=1)
+            if pos_1based not in pages_to_trim
+        ]
+        
+        # Guard: if trimming would remove all pages, retain original chunk
+        if not filtered_indices:
+            filtered_indices = chunk_indices
+            
         student_chunks.append({
             "student_index": len(student_chunks) + 1,
-            "page_indices": chunk_indices,
-            "total_pages": len(chunk_indices)
+            "page_indices": filtered_indices,
+            "total_pages": len(filtered_indices),
+            "trimmed_pages_count": chunk_len - len(filtered_indices)
         })
         
     return student_chunks

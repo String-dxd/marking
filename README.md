@@ -52,9 +52,16 @@ ollama run qwen3.8:latest
 \\\
 
 ### 2. Launch the Application
-- **Standard Local/LAN Mode**: Run python run.py or double-click tallus.bat (or the Tallus shortcut / tallus.exe).
-- **Mobile HTTPS Mode (Cloudflare Tunnel + QR Code)**: Run python run.py --tunnel or double-click start_mobile_https.bat.
-  - Automatically provisions a trusted https://*.trycloudflare.com URL.
+- **Native Desktop Mode (Recommended - Browserless & Clean)**:
+  - Double-click **`Tallus.lnk`** (located on your Desktop or project folder) or run `tallus.bat`.
+  - Or run: `python tallus_desktop.py` (or `python run.py --desktop`).
+  - Runs FastAPI silently in the background with zero command prompt window.
+  - Opens in a dedicated, native desktop window (powered by Microsoft Edge WebView2).
+  - Can be pinned directly to your **Windows Taskbar** or Start Menu with the monochrome Tallus icon.
+  - Automatically and cleanly terminates background servers when the window is closed.
+- **Classic Browser / Terminal Mode**: Run `python run.py`.
+- **Mobile HTTPS Mode (Cloudflare Tunnel + QR Code)**: Run `python run.py --tunnel` (or `python tallus_desktop.py --tunnel`).
+  - Automatically provisions a trusted `https://*.trycloudflare.com` URL.
   - Displays a scannable ASCII QR code in the terminal for instant mobile phone access and camera uploads.
 
 ---
@@ -127,7 +134,10 @@ Tallus/
 │   │   └── js/app.js            # Interactive logic & Chart.js visualizations
 │   └── main.py                  # FastAPI application entrypoint
 ├── tests/                       # Unit & integration tests
-├── run.py                       # Python launch script with auto-browser opening
-├── tallus.bat                   # One-click Windows launcher (or Tallus.lnk / tallus.exe)
+├── tallus_desktop.py            # Native desktop WebView2 application wrapper
+├── create_shortcut.py           # Utility to generate windowless Tallus.lnk shortcuts
+├── run.py                       # CLI / terminal launcher (supports --desktop & --tunnel)
+├── tallus.bat                   # One-click Windows desktop launcher
+├── Tallus.lnk                   # Direct windowless desktop shortcut
 └── requirements.txt             # Python dependencies
 \\\

@@ -31,7 +31,7 @@ def find_cloudflared_path():
             return c
     return None
 
-def start_cloudflare_tunnel(port=8000):
+def start_cloudflare_tunnel(port=8250):
     cf_path = find_cloudflared_path()
     if not cf_path:
         print("[Cloudflare] ERROR: cloudflared.exe not found on system.")
@@ -91,7 +91,7 @@ def start_cloudflare_tunnel(port=8000):
     return process
 
 if __name__ == "__main__":
-    p = start_cloudflare_tunnel(8000)
+    p = start_cloudflare_tunnel(8250)
     if p:
         try:
             while True:

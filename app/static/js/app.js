@@ -23,10 +23,18 @@ function escapeHtml(str) {
 
 document.addEventListener("DOMContentLoaded", () => {
     checkSystemHealth();
+    checkGoogleClassroomStatus();
     loadDashboardData();
     loadAssignments();
     loadSubmissionsQueue();
     loadStudentsRoster();
+    initSplitTrimControls();
+});
+
+window.addEventListener("message", (event) => {
+    if (event.data && event.data.type === "GOOGLE_AUTH_SUCCESS") {
+        checkGoogleClassroomStatus();
+    }
 });
 
 // Tab Navigation
@@ -215,22 +223,44 @@ async function loadQuickReviewQueue() {
             if (reviewBadge) reviewBadge.classList.add("hidden");
             if (mobileReviewBadge) mobileReviewBadge.classList.add("hidden");
         }
+
+        // Dashboard unprocessed badge
+        const unprocessedCount = pendingSubs.filter(s => !s.is_pipeline_complete).length;
+        const dashBadge = document.getElementById("dashboard-unprocessed-badge");
+        if (dashBadge) {
+            if (unprocessedCount > 0) {
+                dashBadge.textContent = `${unprocessedCount} unpipelined`;
+                dashBadge.classList.remove("hidden");
+            } else {
+                dashBadge.classList.add("hidden");
+            }
+        }
         
         if (pendingSubs.length === 0) {
             list.innerHTML = `<div class="text-xs text-slate-500 py-6 text-center">No submissions awaiting review 🎉</div>`;
             return;
         }
         
-        list.innerHTML = pendingSubs.slice(0, 6).map(s => `
+        list.innerHTML = pendingSubs.slice(0, 6).map(s => {
+            const s1 = s.step1_done ? '<span class="text-emerald-400 font-bold" title="Step 1 Extract Complete">S1✓</span>' : '<span class="text-slate-500" title="Step 1 Extract Pending">S1⏳</span>';
+            const s2 = s.step2_done ? '<span class="text-emerald-400 font-bold" title="Step 2 Mark Complete">S2✓</span>' : '<span class="text-slate-500" title="Step 2 Mark Pending">S2⏳</span>';
+            const s3 = s.step3_done ? '<span class="text-emerald-400 font-bold" title="Step 3 Direct Mark Complete">S3✓</span>' : '<span class="text-slate-500" title="Step 3 Direct Mark Pending">S3⏳</span>';
+            return `
             <div class="p-3 bg-slate-950 border border-slate-800 hover:border-indigo-500/60 rounded-xl transition-all flex items-center justify-between group">
                 <div onclick="openReviewForSubmission(${s.id})" class="cursor-pointer flex-1">
                     <h5 class="text-xs font-bold text-white flex items-center gap-1.5">
-                        ${s.student_name}
+                        ${escapeHtml(s.student_name)}
                         ${!s.is_existing_student ? '<span class="text-[10px] px-1.5 py-0.2 rounded bg-amber-950 text-amber-400 border border-amber-800">New</span>' : ''}
                     </h5>
-                    <span class="text-[11px] text-slate-400">${s.class_name} • Status: <b class="${s.status === 'review_ready' ? 'text-indigo-400' : 'text-amber-400'}">${s.status}</b></span>
+                    <div class="flex items-center gap-2 mt-0.5">
+                        <span class="text-[11px] text-slate-400">${escapeHtml(s.class_name)} • Status: <b class="${s.status === 'review_ready' ? 'text-indigo-400' : 'text-amber-400'}">${s.status}</b></span>
+                        <span class="text-[10px] bg-slate-900 border border-slate-800 px-1.5 py-0.2 rounded font-mono">${s1} ${s2} ${s3}</span>
+                    </div>
                 </div>
                 <div class="flex items-center gap-1.5">
+                    <button onclick="event.stopPropagation(); runSingleSubmissionPipelineFromQueue(${s.id})" title="Run 3-step pipeline on this script (auto-skips completed steps)" class="p-1.5 bg-violet-950/60 hover:bg-violet-900 text-violet-300 border border-violet-800/60 rounded-lg text-xs transition-all">
+                        <i data-lucide="fast-forward" class="w-3.5 h-3.5"></i>
+                    </button>
                     <button onclick="deleteSubmissionById(${s.id}, event)" title="Delete submission" class="p-1 text-slate-500 hover:text-rose-400 hover:bg-rose-950/50 rounded-lg transition-all">
                         <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                     </button>
@@ -239,7 +269,8 @@ async function loadQuickReviewQueue() {
                     </button>
                 </div>
             </div>
-        `).join("");
+        `;
+        }).join("");
         lucide.createIcons();
     } catch (e) {
         list.innerHTML = `<div class="text-xs text-rose-400">Failed to load review queue</div>`;
@@ -330,13 +361,19 @@ async function loadAssignments(fetchFromApi = true) {
         
         grid.innerHTML = assignments.map(a => {
             const isSelected = selectedAssignmentIds.has(a.id);
+            let markerBadge = "";
+            if (a.marker_type === "lower_sec_science") markerBadge = `<span class="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-sky-950 text-sky-400 border border-sky-800">🔬 Science</span>`;
+            else if (a.marker_type === "chinese_essay") markerBadge = `<span class="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800">✍️ Chinese Essay</span>`;
+            else if (a.marker_type === "general") markerBadge = `<span class="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">📝 General</span>`;
+
             return `
                 <div class="bg-slate-900/90 border ${isSelected ? 'border-indigo-500 bg-indigo-950/20 shadow-md shadow-indigo-500/10' : 'border-slate-800 hover:border-slate-700'} rounded-2xl p-5 shadow-sm space-y-4 flex flex-col justify-between group transition-all relative">
                     <div>
                         <div class="flex items-start justify-between gap-2">
-                            <div class="flex items-center gap-2">
+                            <div class="flex items-center gap-2 flex-wrap">
                                 <input type="checkbox" onchange="toggleAssignmentSelection(${a.id}, event)" ${isSelected ? 'checked' : ''} title="Select assignment" class="w-4 h-4 text-indigo-600 rounded bg-slate-800 border-slate-700 cursor-pointer shrink-0">
                                 <span class="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-indigo-950 text-indigo-400 border border-indigo-800">${escapeHtml(a.subject)}</span>
+                                ${markerBadge}
                             </div>
                             <span class="text-xs text-slate-400 font-medium">${escapeHtml(a.class_name)}</span>
                         </div>
@@ -351,6 +388,9 @@ async function loadAssignments(fetchFromApi = true) {
                             <span class="text-slate-400">Marked: <b class="text-emerald-400">${a.approved_count}</b>/${a.submission_count}</span>
                         </div>
                         <div class="flex items-center gap-1">
+                            <button onclick="rerunPipelineSteps2And3ForAssignment(${a.id}, this, event)" title="Rerun Steps 2 & 3: Re-mark and re-annotate scripts using the updated marking scheme (preserves extracted student handwriting)" class="px-2 py-1 bg-violet-950 hover:bg-violet-900 text-violet-300 border border-violet-800 rounded-lg text-xs font-medium flex items-center gap-1 transition-all">
+                                <i data-lucide="refresh-cw" class="w-3 h-3 text-violet-400"></i> Rerun 2 & 3
+                            </button>
                             <button onclick="openReviewForAssignment(${a.id}, event)" title="Review submissions for this assignment" class="px-2 py-1 bg-indigo-600/30 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/40 rounded-lg text-xs font-medium flex items-center gap-1 transition-all">
                                 <i data-lucide="check-check" class="w-3.5 h-3.5"></i> Review
                             </button>
@@ -471,7 +511,331 @@ async function confirmDeleteAssignment(assignmentId, title, event) {
     }
 }
 
+// State for structured rubrics in assignment modals
+let createAssignmentRubric = [];
+let editAssignmentRubric = [];
+
+function switchRubricViewMode(mode, view) {
+    const isCreate = mode === 'create';
+    const structuredBtn = document.getElementById(isCreate ? 'btn-create-rubric-structured' : 'btn-edit-rubric-structured');
+    const rawBtn = document.getElementById(isCreate ? 'btn-create-rubric-raw' : 'btn-edit-rubric-raw');
+    const structuredView = document.getElementById(isCreate ? 'create-rubric-structured-view' : 'edit-rubric-structured-view');
+    const rawView = document.getElementById(isCreate ? 'create-rubric-raw-view' : 'edit-rubric-raw-view');
+    const textarea = document.getElementById(isCreate ? 'new-assignment-scheme' : 'edit-assignment-scheme');
+    const rubricList = isCreate ? createAssignmentRubric : editAssignmentRubric;
+
+    if (view === 'structured') {
+        if (structuredBtn) structuredBtn.className = "px-3 py-1 rounded-lg text-xs font-semibold bg-indigo-600 text-white shadow-sm flex items-center gap-1.5 transition-all";
+        if (rawBtn) rawBtn.className = "px-3 py-1 rounded-lg text-xs font-medium text-slate-400 hover:text-white flex items-center gap-1.5 transition-all";
+        if (structuredView) structuredView.classList.remove('hidden');
+        if (rawView) rawView.classList.add('hidden');
+        renderRubricCards(mode);
+    } else {
+        if (rawBtn) rawBtn.className = "px-3 py-1 rounded-lg text-xs font-semibold bg-indigo-600 text-white shadow-sm flex items-center gap-1.5 transition-all";
+        if (structuredBtn) structuredBtn.className = "px-3 py-1 rounded-lg text-xs font-medium text-slate-400 hover:text-white flex items-center gap-1.5 transition-all";
+        if (rawView) rawView.classList.remove('hidden');
+        if (structuredView) structuredView.classList.add('hidden');
+        
+        // If textarea is blank and structured items exist, format into markdown
+        if (textarea && !textarea.value.trim() && rubricList && rubricList.length > 0) {
+            textarea.value = formatRubricToMarkdown(rubricList);
+        }
+    }
+    lucide.createIcons();
+}
+
+function formatRubricToMarkdown(items) {
+    if (!items || !items.length) return "";
+    return items.map((q, idx) => {
+        let lines = [`### Question ${q.question_no || idx + 1}: ${q.question_title || ''} (${q.max_marks || 1} marks)`];
+        if (q.criteria && q.criteria.length) {
+            q.criteria.forEach((c, cIdx) => {
+                lines.push(`- **${c.criterion || `Criterion ${cIdx + 1}`}** [${c.max || 1}m]${c.description ? `: ${c.description}` : ''}`);
+            });
+        }
+        return lines.join('\n');
+    }).join('\n\n');
+}
+
+function handleMaxMarksInput(mode) {
+    recalculateRubricTotals(mode);
+}
+
+function recalculateRubricTotals(mode) {
+    const isCreate = mode === 'create';
+    const items = isCreate ? createAssignmentRubric : editAssignmentRubric;
+    const totalLabel = document.getElementById(isCreate ? 'label-create-rubric-total' : 'label-edit-rubric-total');
+    const targetLabel = document.getElementById(isCreate ? 'label-create-max-marks-target' : 'label-edit-max-marks-target');
+    const marksInput = document.getElementById(isCreate ? 'new-assignment-marks' : 'edit-assignment-marks');
+    const syncBtn = document.getElementById(isCreate ? 'btn-create-sync-marks' : 'btn-edit-sync-marks');
+
+    let totalMarks = 0;
+    (items || []).forEach(q => {
+        totalMarks += parseFloat(q.max_marks) || 0;
+    });
+    totalMarks = Math.round(totalMarks * 10) / 10;
+
+    const targetMax = parseFloat(marksInput?.value) || 0;
+
+    if (totalLabel) totalLabel.textContent = totalMarks.toFixed(1);
+    if (targetLabel) targetLabel.textContent = targetMax.toFixed(1);
+
+    if (syncBtn) {
+        if (totalMarks > 0 && Math.abs(totalMarks - targetMax) > 0.01) {
+            syncBtn.classList.remove('hidden');
+        } else {
+            syncBtn.classList.add('hidden');
+        }
+    }
+}
+
+function syncRubricMarksToMax(mode) {
+    const isCreate = mode === 'create';
+    const items = isCreate ? createAssignmentRubric : editAssignmentRubric;
+    let totalMarks = 0;
+    (items || []).forEach(q => {
+        totalMarks += parseFloat(q.max_marks) || 0;
+    });
+    totalMarks = Math.round(totalMarks * 10) / 10;
+    const marksInput = document.getElementById(isCreate ? 'new-assignment-marks' : 'edit-assignment-marks');
+    if (marksInput) {
+        marksInput.value = totalMarks > 0 ? totalMarks : 100;
+    }
+    recalculateRubricTotals(mode);
+}
+
+function renderRubricCards(mode) {
+    const isCreate = mode === 'create';
+    const container = document.getElementById(isCreate ? 'create-rubric-questions-container' : 'edit-rubric-questions-container');
+    const badge = document.getElementById(isCreate ? 'badge-create-criteria-count' : 'badge-edit-criteria-count');
+    const items = isCreate ? createAssignmentRubric : editAssignmentRubric;
+
+    if (badge) {
+        const totalCriteria = (items || []).reduce((sum, q) => sum + ((q.criteria && q.criteria.length) || 0), 0);
+        badge.textContent = `${items.length} Qs / ${totalCriteria} crit`;
+    }
+
+    if (!container) return;
+
+    if (!items || items.length === 0) {
+        container.innerHTML = `
+            <div class="text-xs text-slate-500 p-6 border border-dashed border-slate-800 rounded-xl text-center space-y-2">
+                <i data-lucide="scan-text" class="w-7 h-7 text-slate-600 mx-auto"></i>
+                <div class="font-bold text-slate-300">No structured criteria breakdown yet</div>
+                <p class="text-[11px] text-slate-500">Upload a marking scheme file above, or click <b>"Parse with AI"</b> on your scheme text, or click <b>"+ Add Question"</b> to build criteria manually.</p>
+            </div>
+        `;
+        recalculateRubricTotals(mode);
+        lucide.createIcons();
+        return;
+    }
+
+    container.innerHTML = items.map((q, qIdx) => `
+        <div class="q-rubric-card space-y-3 bg-slate-950 p-3.5 rounded-xl border border-slate-800 hover:border-slate-700 transition-all" id="${mode}-q-card-${qIdx}">
+            <!-- Question Header Row -->
+            <div class="flex items-center justify-between gap-2.5">
+                <div class="flex items-center gap-2 flex-1">
+                    <span class="text-xs font-black text-indigo-400 shrink-0">Q</span>
+                    <input type="text" value="${escapeHtml(q.question_no || String(qIdx + 1))}" oninput="updateRubricField('${mode}', ${qIdx}, null, 'question_no', this.value)" placeholder="${qIdx + 1}" class="w-16 bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-xs font-bold text-white text-center focus:outline-none focus:border-indigo-500">
+                    <input type="text" value="${escapeHtml(q.question_title || '')}" oninput="updateRubricField('${mode}', ${qIdx}, null, 'question_title', this.value)" placeholder="Question title or topic description..." class="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-indigo-500">
+                </div>
+                <div class="flex items-center gap-1.5 shrink-0">
+                    <span class="text-[11px] text-slate-400">Max Marks:</span>
+                    <input type="number" step="0.5" value="${q.max_marks || 1}" oninput="updateRubricField('${mode}', ${qIdx}, null, 'max_marks', this.value)" class="w-16 bg-slate-900 border border-indigo-700/80 rounded-lg px-2 py-1 text-xs font-bold text-white text-center focus:outline-none focus:border-indigo-500">
+                    <button type="button" onclick="removeRubricQuestion('${mode}', ${qIdx})" title="Delete question" class="text-slate-600 hover:text-rose-400 p-1 transition-all"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
+                </div>
+            </div>
+
+            <!-- Rubric Criteria Breakdown Container (Matching Review UI) -->
+            <div class="space-y-1.5 pt-1">
+                <div class="flex items-center justify-between text-[11px]">
+                    <span class="font-semibold text-slate-400 flex items-center gap-1">
+                        <i data-lucide="check-square" class="w-3 h-3 text-indigo-400"></i> Rubric Criteria Breakdown:
+                    </span>
+                    <button type="button" onclick="addRubricCriterion('${mode}', ${qIdx})" class="text-[11px] text-indigo-400 hover:text-indigo-300 font-semibold flex items-center gap-1">
+                        <i data-lucide="plus" class="w-3 h-3"></i> Add Criterion
+                    </button>
+                </div>
+                <div class="grid grid-cols-1 gap-2 bg-slate-900/90 p-3 rounded-lg border border-slate-800/80">
+                    ${(q.criteria && q.criteria.length > 0) ? q.criteria.map((c, cIdx) => `
+                        <div class="flex items-start justify-between gap-2.5 text-[11px] py-1.5 border-b border-slate-800/60 last:border-b-0">
+                            <div class="flex-1 space-y-1">
+                                <div class="flex items-center gap-2">
+                                    <span class="text-indigo-400 font-bold">•</span>
+                                    <input type="text" value="${escapeHtml(c.criterion || '')}" oninput="updateRubricField('${mode}', ${qIdx}, ${cIdx}, 'criterion', this.value)" placeholder="Criterion requirement (e.g. Formula stated correctly)..." class="flex-1 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-indigo-500">
+                                </div>
+                                <div class="pl-3.5">
+                                    <input type="text" value="${escapeHtml(c.description || c.comment || '')}" oninput="updateRubricField('${mode}', ${qIdx}, ${cIdx}, 'description', this.value)" placeholder="Guidance, expected answer or band details (optional)..." class="w-full bg-slate-950/60 border border-slate-800/80 rounded px-2 py-0.5 text-[11px] text-slate-400 focus:outline-none focus:border-slate-700">
+                                </div>
+                            </div>
+                            <div class="shrink-0 flex items-center gap-1.5 pt-0.5">
+                                <span class="text-[10px] text-slate-500">Marks:</span>
+                                <input type="number" step="0.5" value="${c.max || 1}" oninput="updateRubricField('${mode}', ${qIdx}, ${cIdx}, 'max', this.value)" class="w-14 bg-slate-950 border border-indigo-900/80 rounded px-1.5 py-0.5 text-xs font-mono font-bold text-indigo-300 text-center focus:outline-none focus:border-indigo-500">
+                                <button type="button" onclick="removeRubricCriterion('${mode}', ${qIdx}, ${cIdx})" title="Delete criterion" class="text-slate-600 hover:text-rose-400 p-1 transition-all"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
+                            </div>
+                        </div>
+                    `).join('') : `
+                        <div class="text-[11px] text-slate-500 italic text-center py-2">
+                            No criteria added yet. Click "+ Add Criterion" above.
+                        </div>
+                    `}
+                </div>
+            </div>
+        </div>
+    `).join('');
+
+    recalculateRubricTotals(mode);
+    lucide.createIcons();
+}
+
+function addRubricQuestion(mode) {
+    const isCreate = mode === 'create';
+    const items = isCreate ? createAssignmentRubric : editAssignmentRubric;
+    const nextNo = String(items.length + 1);
+    items.push({
+        question_no: nextNo,
+        question_title: `Question ${nextNo}`,
+        max_marks: 2.0,
+        criteria: [
+            { criterion: "Expected answer and workings", max: 2.0, description: "" }
+        ]
+    });
+    renderRubricCards(mode);
+}
+
+function removeRubricQuestion(mode, qIdx) {
+    const isCreate = mode === 'create';
+    const items = isCreate ? createAssignmentRubric : editAssignmentRubric;
+    items.splice(qIdx, 1);
+    renderRubricCards(mode);
+}
+
+function addRubricCriterion(mode, qIdx) {
+    const isCreate = mode === 'create';
+    const items = isCreate ? createAssignmentRubric : editAssignmentRubric;
+    if (!items[qIdx]) return;
+    if (!Array.isArray(items[qIdx].criteria)) items[qIdx].criteria = [];
+    items[qIdx].criteria.push({
+        criterion: `Criterion ${items[qIdx].criteria.length + 1}`,
+        max: 1.0,
+        description: ""
+    });
+    renderRubricCards(mode);
+}
+
+function removeRubricCriterion(mode, qIdx, cIdx) {
+    const isCreate = mode === 'create';
+    const items = isCreate ? createAssignmentRubric : editAssignmentRubric;
+    if (!items[qIdx] || !items[qIdx].criteria) return;
+    items[qIdx].criteria.splice(cIdx, 1);
+    renderRubricCards(mode);
+}
+
+function updateRubricField(mode, qIdx, cIdx, field, value) {
+    const isCreate = mode === 'create';
+    const items = isCreate ? createAssignmentRubric : editAssignmentRubric;
+    if (!items[qIdx]) return;
+
+    if (cIdx === null) {
+        if (field === 'max_marks') {
+            items[qIdx].max_marks = parseFloat(value) || 0.0;
+        } else {
+            items[qIdx][field] = value;
+        }
+    } else {
+        if (!items[qIdx].criteria || !items[qIdx].criteria[cIdx]) return;
+        if (field === 'max') {
+            items[qIdx].criteria[cIdx].max = parseFloat(value) || 0.0;
+            // Recalculate question max marks from sum of criteria
+            const critSum = items[qIdx].criteria.reduce((s, c) => s + (parseFloat(c.max) || 0), 0);
+            if (critSum > 0) {
+                items[qIdx].max_marks = Math.round(critSum * 10) / 10;
+                const card = document.getElementById(`${mode}-q-card-${qIdx}`);
+                const qMaxInput = card?.querySelector('.flex-1 + .flex input[type="number"]');
+                if (qMaxInput) qMaxInput.value = items[qIdx].max_marks;
+            }
+        } else {
+            items[qIdx].criteria[cIdx][field] = value;
+        }
+    }
+
+    recalculateRubricTotals(mode);
+}
+
+async function parseCurrentSchemeText(mode) {
+    const isCreate = mode === 'create';
+    const textarea = document.getElementById(isCreate ? 'new-assignment-scheme' : 'edit-assignment-scheme');
+    const parsingState = document.getElementById(isCreate ? 'create-rubric-parsing-state' : 'edit-rubric-parsing-state');
+    const subjectInput = document.getElementById(isCreate ? 'new-assignment-subject' : 'edit-assignment-subject');
+    const titleInput = document.getElementById(isCreate ? 'new-assignment-title' : 'edit-assignment-title');
+    const marksInput = document.getElementById(isCreate ? 'new-assignment-marks' : 'edit-assignment-marks');
+    const markerInput = document.getElementById(isCreate ? 'new-assignment-marker-type' : 'edit-assignment-marker-type');
+
+    const text = textarea ? textarea.value.trim() : "";
+    if (!text) {
+        alert("Please enter or upload marking scheme / rubric text first.");
+        return;
+    }
+
+    if (parsingState) parsingState.classList.remove('hidden');
+
+    try {
+        const resp = await fetch("/api/assignments/parse-rubric", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                text: text,
+                subject: subjectInput ? subjectInput.value : "",
+                title: titleInput ? titleInput.value : ""
+            })
+        });
+
+        const data = await resp.json();
+        if (data.success) {
+            if (isCreate) {
+                createAssignmentRubric = data.rubric_json || [];
+            } else {
+                editAssignmentRubric = data.rubric_json || [];
+            }
+
+            if (data.clean_marking_scheme) {
+                textarea.value = data.clean_marking_scheme;
+            }
+
+            if (data.suggested_title && titleInput && !titleInput.value.trim()) {
+                titleInput.value = data.suggested_title;
+            }
+            if (data.suggested_subject && subjectInput && !subjectInput.value.trim()) {
+                subjectInput.value = data.suggested_subject;
+            }
+            if (data.suggested_max_marks && marksInput && (!marksInput.value || marksInput.value === "100")) {
+                marksInput.value = data.suggested_max_marks;
+            }
+            if (data.suggested_marker_type && markerInput) {
+                markerInput.value = data.suggested_marker_type;
+            }
+
+            switchRubricViewMode(mode, 'structured');
+            renderRubricCards(mode);
+            if (data.fallback_triggered && data.fallbacks && data.fallbacks.length > 0) {
+                showFallbackNotice(data.fallbacks, "Rubric Parsing");
+            }
+        } else {
+            alert("Failed to parse rubrics: " + (data.detail || "Unknown error"));
+        }
+    } catch (e) {
+        alert("Error parsing rubric with AI: " + e.message);
+    } finally {
+        if (parsingState) parsingState.classList.add('hidden');
+    }
+}
+
 function openCreateAssignmentModal() {
+    const markerTypeSelect = document.getElementById("new-assignment-marker-type");
+    if (markerTypeSelect) markerTypeSelect.value = "auto";
+    createAssignmentRubric = [];
+    switchRubricViewMode('create', 'structured');
+    renderRubricCards('create');
     document.getElementById("modal-create-assignment").classList.remove("hidden");
     lucide.createIcons();
 }
@@ -487,7 +851,9 @@ async function handleSchemeFileUpload(input) {
     formData.append("file", file);
     
     const textarea = document.getElementById("new-assignment-scheme");
-    textarea.value = "📄 Reading file and isolating relevant marking rubrics with local AI...";
+    const parsingState = document.getElementById("create-rubric-parsing-state");
+    if (textarea) textarea.value = "📄 Reading file and isolating relevant marking rubrics with local AI...";
+    if (parsingState) parsingState.classList.remove("hidden");
     
     try {
         const resp = await fetch("/api/assignments/upload-scheme", {
@@ -496,7 +862,7 @@ async function handleSchemeFileUpload(input) {
         });
         const data = await resp.json();
         if (data.success) {
-            textarea.value = data.clean_marking_scheme || data.raw_text || "";
+            if (textarea) textarea.value = data.clean_marking_scheme || data.raw_text || "";
             
             // Auto-prefill assignment details if suggested
             const titleInput = document.getElementById("new-assignment-title");
@@ -512,11 +878,28 @@ async function handleSchemeFileUpload(input) {
             if (data.suggested_max_marks) {
                 marksInput.value = data.suggested_max_marks;
             }
+            if (data.suggested_marker_type) {
+                const markerInput = document.getElementById('new-assignment-marker-type');
+                if (markerInput) markerInput.value = data.suggested_marker_type;
+            }
+
+            if (data.rubric_json && Array.isArray(data.rubric_json) && data.rubric_json.length > 0) {
+                createAssignmentRubric = data.rubric_json;
+            } else {
+                createAssignmentRubric = [];
+            }
+            switchRubricViewMode('create', 'structured');
+            renderRubricCards('create');
+            if (data.fallback_triggered && data.fallbacks && data.fallbacks.length > 0) {
+                showFallbackNotice(data.fallbacks, "Marking Scheme Upload");
+            }
         } else {
-            textarea.value = "Failed to extract text from file.";
+            if (textarea) textarea.value = "Failed to extract text from file.";
         }
     } catch (e) {
-        textarea.value = "Error uploading file: " + e.message;
+        if (textarea) textarea.value = "Error uploading file: " + e.message;
+    } finally {
+        if (parsingState) parsingState.classList.add("hidden");
     }
 }
 
@@ -526,21 +909,51 @@ async function handleCreateAssignment(e) {
     const subject = document.getElementById("new-assignment-subject").value;
     const className = document.getElementById("new-assignment-class").value;
     const maxMarks = parseFloat(document.getElementById("new-assignment-marks").value) || 100;
-    const schemeText = document.getElementById("new-assignment-scheme").value;
+    const markerType = document.getElementById("new-assignment-marker-type")?.value || "auto";
+    let schemeText = document.getElementById("new-assignment-scheme").value;
+    if (!schemeText.trim() && createAssignmentRubric.length > 0) {
+        schemeText = formatRubricToMarkdown(createAssignmentRubric);
+    }
+    const rubricJson = JSON.stringify(createAssignmentRubric || []);
     
     try {
         const resp = await fetch("/api/assignments", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-                title, subject, class_name: className, max_marks: maxMarks, marking_scheme_text: schemeText
+                title, subject, class_name: className, max_marks: maxMarks, marker_type: markerType, marking_scheme_text: schemeText, rubric_json: rubricJson
             })
         });
         const data = await resp.json();
         if (data.success) {
+            const assignmentId = data.id || data.assignment_id;
+            const syncGC = document.getElementById("new-assignment-sync-gc")?.checked;
+            const gcCourse = document.getElementById("new-assignment-gc-course")?.value;
+            const gcCoursework = document.getElementById("new-assignment-gc-coursework")?.value;
+            
+            if (syncGC && gcCourse && assignmentId) {
+                try {
+                    await fetch(`/api/google/assignments/${assignmentId}/link`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            course_id: gcCourse,
+                            coursework_id: gcCoursework === "create_new" ? null : gcCoursework,
+                            create_new: gcCoursework === "create_new",
+                            title: title,
+                            max_marks: maxMarks
+                        })
+                    });
+                } catch (gcErr) {
+                    console.error("Google Classroom linking error:", gcErr);
+                }
+            }
+
             closeCreateAssignmentModal();
             loadAssignments();
             loadDashboardData();
+        } else {
+            alert("Failed to save assignment: " + (data.detail || JSON.stringify(data)));
         }
     } catch (e) {
         alert("Failed to save assignment: " + e.message);
@@ -560,6 +973,22 @@ async function openEditAssignmentModal(assignmentId, event) {
         document.getElementById("edit-assignment-class").value = a.class_name || "";
         document.getElementById("edit-assignment-marks").value = a.max_marks || 100;
         document.getElementById("edit-assignment-scheme").value = a.marking_scheme_text || "";
+        const editMarkerSelect = document.getElementById("edit-assignment-marker-type");
+        if (editMarkerSelect) editMarkerSelect.value = a.marker_type || "auto";
+
+        try {
+            editAssignmentRubric = JSON.parse(a.rubric_json || "[]");
+            if (!Array.isArray(editAssignmentRubric)) editAssignmentRubric = [];
+        } catch (e) {
+            editAssignmentRubric = [];
+        }
+
+        if (editAssignmentRubric.length > 0) {
+            switchRubricViewMode('edit', 'structured');
+        } else {
+            switchRubricViewMode('edit', 'raw');
+        }
+        renderRubricCards('edit');
 
         populateExistingClassesAndSubjects();
         document.getElementById("modal-edit-assignment").classList.remove("hidden");
@@ -580,7 +1009,9 @@ async function handleEditSchemeFileUpload(input) {
     formData.append("file", file);
 
     const textarea = document.getElementById("edit-assignment-scheme");
-    textarea.value = "📄 Reading file and isolating relevant marking rubrics with local AI...";
+    const parsingState = document.getElementById("edit-rubric-parsing-state");
+    if (textarea) textarea.value = "📄 Reading file and isolating relevant marking rubrics with local AI...";
+    if (parsingState) parsingState.classList.remove("hidden");
 
     try {
         const resp = await fetch("/api/assignments/upload-scheme", {
@@ -589,18 +1020,32 @@ async function handleEditSchemeFileUpload(input) {
         });
         const data = await resp.json();
         if (data.success) {
-            textarea.value = data.clean_marking_scheme || data.raw_text || "";
+            if (textarea) textarea.value = data.clean_marking_scheme || data.raw_text || "";
             const marksInput = document.getElementById("edit-assignment-marks");
             if (data.suggested_max_marks && (!marksInput.value || marksInput.value == "100")) {
                 marksInput.value = data.suggested_max_marks;
             }
+            if (data.suggested_marker_type) {
+                const markerInput = document.getElementById("edit-assignment-marker-type");
+                if (markerInput) markerInput.value = data.suggested_marker_type;
+            }
+
+            if (data.rubric_json && Array.isArray(data.rubric_json) && data.rubric_json.length > 0) {
+                editAssignmentRubric = data.rubric_json;
+            } else {
+                editAssignmentRubric = [];
+            }
+            switchRubricViewMode('edit', 'structured');
+            renderRubricCards('edit');
         } else {
-            textarea.value = "";
+            if (textarea) textarea.value = "";
             alert("Could not extract marking scheme: " + (data.detail || "Server error"));
         }
     } catch (e) {
-        textarea.value = "";
+        if (textarea) textarea.value = "";
         alert("Upload failed: " + e.message);
+    } finally {
+        if (parsingState) parsingState.classList.add("hidden");
     }
 }
 
@@ -611,7 +1056,12 @@ async function handleEditAssignmentSubmit(event) {
     const subject = document.getElementById("edit-assignment-subject").value.trim();
     const className = document.getElementById("edit-assignment-class").value.trim();
     const maxMarks = parseFloat(document.getElementById("edit-assignment-marks").value) || 100.0;
-    const schemeText = document.getElementById("edit-assignment-scheme").value.trim();
+    const markerType = document.getElementById("edit-assignment-marker-type")?.value || "auto";
+    let schemeText = document.getElementById("edit-assignment-scheme").value.trim();
+    if (!schemeText && editAssignmentRubric.length > 0) {
+        schemeText = formatRubricToMarkdown(editAssignmentRubric);
+    }
+    const rubricJson = JSON.stringify(editAssignmentRubric || []);
 
     if (!assignmentId || !title || !subject || !className) {
         alert("Please fill in all required assignment fields.");
@@ -627,7 +1077,9 @@ async function handleEditAssignmentSubmit(event) {
                 subject,
                 class_name: className,
                 max_marks: maxMarks,
-                marking_scheme_text: schemeText
+                marker_type: markerType,
+                marking_scheme_text: schemeText,
+                rubric_json: rubricJson
             })
         });
         const data = await resp.json();
@@ -635,6 +1087,25 @@ async function handleEditAssignmentSubmit(event) {
             closeEditAssignmentModal();
             loadAssignments();
             loadDashboardData();
+
+            // Check if existing submissions exist to offer rerunning Steps 2 & 3
+            try {
+                const subsResp = await fetch(`/api/submissions/assignment/${assignmentId}`);
+                const subs = await subsResp.json();
+                const eligibleSubs = (subs || []).filter(s => s.step1_done || s.is_pipeline_complete || s.status === "approved" || s.total_score > 0);
+                if (eligibleSubs.length > 0) {
+                    const promptRerun = confirm(
+                        `Assignment "${title}" updated successfully!\n\n` +
+                        `Found ${eligibleSubs.length} student submission(s) with extracted handwriting.\n\n` +
+                        `Would you like to rerun Pipeline Steps 2 & 3 (Re-mark & Re-annotate) now to update their marks against this new marking scheme?`
+                    );
+                    if (promptRerun) {
+                        rerunPipelineSteps2And3ForAssignment(assignmentId);
+                    }
+                }
+            } catch (checkErr) {
+                console.warn("Could not check submissions for rerun prompt:", checkErr);
+            }
         } else {
             alert("Failed to update assignment: " + (data.detail || JSON.stringify(data)));
         }
@@ -643,12 +1114,202 @@ async function handleEditAssignmentSubmit(event) {
     }
 }
 
+async function handleEditAssignmentAndRerunPipeline() {
+    const assignmentId = document.getElementById("edit-assignment-id").value;
+    const title = document.getElementById("edit-assignment-title").value.trim();
+    const subject = document.getElementById("edit-assignment-subject").value.trim();
+    const className = document.getElementById("edit-assignment-class").value.trim();
+    const maxMarks = parseFloat(document.getElementById("edit-assignment-marks").value) || 100.0;
+    const markerType = document.getElementById("edit-assignment-marker-type")?.value || "auto";
+    let schemeText = document.getElementById("edit-assignment-scheme").value.trim();
+    if (!schemeText && editAssignmentRubric.length > 0) {
+        schemeText = formatRubricToMarkdown(editAssignmentRubric);
+    }
+    const rubricJson = JSON.stringify(editAssignmentRubric || []);
+
+    if (!assignmentId || !title || !subject || !className) {
+        alert("Please fill in all required assignment fields.");
+        return;
+    }
+
+    const btn = document.getElementById("btn-save-and-rerun-pipeline");
+    const origHtml = btn ? btn.innerHTML : "";
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Saving...`;
+        if (window.lucide) lucide.createIcons();
+    }
+
+    try {
+        const resp = await fetch(`/api/assignments/${assignmentId}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                title,
+                subject,
+                class_name: className,
+                max_marks: maxMarks,
+                marker_type: markerType,
+                marking_scheme_text: schemeText,
+                rubric_json: rubricJson
+            })
+        });
+        const data = await resp.json();
+        if (resp.ok && data.success) {
+            closeEditAssignmentModal();
+            loadAssignments();
+            loadDashboardData();
+            await rerunPipelineSteps2And3ForAssignment(assignmentId);
+        } else {
+            alert("Failed to update assignment: " + (data.detail || JSON.stringify(data)));
+        }
+    } catch (e) {
+        alert("Error saving assignment: " + e.message);
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = origHtml;
+            if (window.lucide) lucide.createIcons();
+        }
+    }
+}
+
 // 3. Scan Ingestion, Auto-Splitting & Highlighting
+let selectedTrimPages = new Set();
+
+function initSplitTrimControls() {
+    renderSplitTrimPillButtons();
+}
+
+function handlePagesPerStudentChange() {
+    const input = document.getElementById("split-pages-per-student");
+    let val = parseInt(input.value) || 1;
+    if (val < 1) val = 1;
+    if (val > 50) val = 50;
+    input.value = val;
+    
+    // If trim last page is checked, ensure last page is in set and remove any pages > val
+    const trimLast = document.getElementById("split-trim-last-page") ? document.getElementById("split-trim-last-page").checked : false;
+    const newSet = new Set();
+    selectedTrimPages.forEach(p => {
+        if (p < val) newSet.add(p);
+    });
+    if (trimLast && val > 1) {
+        newSet.add(val);
+    }
+    selectedTrimPages = newSet;
+    syncCustomTrimInputFromSet();
+    renderSplitTrimPillButtons();
+}
+
+function toggleTrimLastPage(isChecked) {
+    const pagesPerStudent = parseInt(document.getElementById("split-pages-per-student")?.value) || 1;
+    if (pagesPerStudent > 1) {
+        if (isChecked) {
+            selectedTrimPages.add(pagesPerStudent);
+        } else {
+            selectedTrimPages.delete(pagesPerStudent);
+        }
+    }
+    syncCustomTrimInputFromSet();
+    renderSplitTrimPillButtons();
+}
+
+function toggleTrimPage(pageNum) {
+    const pagesPerStudent = parseInt(document.getElementById("split-pages-per-student")?.value) || 1;
+    if (selectedTrimPages.has(pageNum)) {
+        selectedTrimPages.delete(pageNum);
+        if (pageNum === pagesPerStudent) {
+            const lastCheck = document.getElementById("split-trim-last-page");
+            if (lastCheck) lastCheck.checked = false;
+        }
+    } else {
+        selectedTrimPages.add(pageNum);
+        if (pageNum === pagesPerStudent) {
+            const lastCheck = document.getElementById("split-trim-last-page");
+            if (lastCheck) lastCheck.checked = true;
+        }
+    }
+    syncCustomTrimInputFromSet();
+    renderSplitTrimPillButtons();
+}
+
+function handleCustomTrimInput(val) {
+    const pagesPerStudent = parseInt(document.getElementById("split-pages-per-student")?.value) || 1;
+    const newSet = new Set();
+    const parts = val.replace(/;/g, ",").split(",");
+    parts.forEach(p => {
+        const trimmed = p.trim().toLowerCase();
+        if (trimmed === "last" && pagesPerStudent > 1) {
+            newSet.add(pagesPerStudent);
+        } else if (/^\d+$/.test(trimmed)) {
+            const num = parseInt(trimmed);
+            if (num >= 1 && num <= pagesPerStudent) {
+                newSet.add(num);
+            }
+        }
+    });
+    selectedTrimPages = newSet;
+    const lastCheck = document.getElementById("split-trim-last-page");
+    if (lastCheck) {
+        lastCheck.checked = selectedTrimPages.has(pagesPerStudent);
+    }
+    renderSplitTrimPillButtons(false);
+}
+
+function syncCustomTrimInputFromSet() {
+    const input = document.getElementById("split-trim-pages-custom");
+    if (!input) return;
+    const arr = Array.from(selectedTrimPages).sort((a, b) => a - b);
+    input.value = arr.join(", ");
+}
+
+function getSelectedTrimPagesString() {
+    const arr = Array.from(selectedTrimPages).sort((a, b) => a - b);
+    return arr.join(",");
+}
+
+function renderSplitTrimPillButtons(syncInput = true) {
+    const container = document.getElementById("split-trim-pills-container");
+    if (!container) return;
+    
+    const pagesPerStudent = parseInt(document.getElementById("split-pages-per-student")?.value) || 2;
+    container.innerHTML = "";
+    
+    for (let p = 1; p <= pagesPerStudent; p++) {
+        const isTrimmed = selectedTrimPages.has(p);
+        const isLast = (p === pagesPerStudent && pagesPerStudent > 1);
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.onclick = () => toggleTrimPage(p);
+        
+        let label = `Page ${p}`;
+        if (isLast) label += " (Last)";
+        
+        if (isTrimmed) {
+            btn.className = "px-2 py-1 text-[11px] font-bold rounded bg-rose-600 text-white border border-rose-500 shadow-sm flex items-center gap-1 transition-all";
+            btn.innerHTML = `<i data-lucide="scissors" class="w-3 h-3"></i> <span>Trim ${label}</span>`;
+        } else {
+            btn.className = "px-2 py-1 text-[11px] font-medium rounded bg-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-700 border border-slate-700 transition-all";
+            btn.textContent = label;
+        }
+        container.appendChild(btn);
+    }
+    
+    if (syncInput) {
+        syncCustomTrimInputFromSet();
+    }
+    if (typeof lucide !== "undefined" && lucide.createIcons) {
+        lucide.createIcons();
+    }
+}
+
 function setIngestMode(mode) {
     currentIngestMode = mode;
     const btnSplit = document.getElementById("btn-mode-split");
     const btnMulti = document.getElementById("btn-mode-multi");
     const splitPanel = document.getElementById("split-settings-panel");
+    const multiPanel = document.getElementById("multi-settings-panel");
     const fileInput = document.getElementById("scan-file-input");
     const label = document.getElementById("scan-file-label");
     const subtext = document.getElementById("scan-file-subtext");
@@ -658,6 +1319,8 @@ function setIngestMode(mode) {
         btnSplit.className = "px-4 py-2 text-xs font-bold rounded-xl transition-all flex items-center gap-2 bg-indigo-600 text-white shadow-md shadow-indigo-600/20";
         btnMulti.className = "px-4 py-2 text-xs font-semibold text-slate-400 hover:text-white rounded-xl transition-all flex items-center gap-2 bg-slate-800 border border-slate-700";
         splitPanel.classList.remove("hidden");
+        if (multiPanel) multiPanel.classList.add("hidden");
+        renderSplitTrimPillButtons();
         fileInput.removeAttribute("multiple");
         label.textContent = "Click to select combined class PDF file";
         subtext.textContent = "e.g. 60-page PDF of 30 students' 2-page exams";
@@ -666,6 +1329,7 @@ function setIngestMode(mode) {
         btnMulti.className = "px-4 py-2 text-xs font-bold rounded-xl transition-all flex items-center gap-2 bg-indigo-600 text-white shadow-md shadow-indigo-600/20";
         btnSplit.className = "px-4 py-2 text-xs font-semibold text-slate-400 hover:text-white rounded-xl transition-all flex items-center gap-2 bg-slate-800 border border-slate-700";
         splitPanel.classList.add("hidden");
+        if (multiPanel) multiPanel.classList.remove("hidden");
         fileInput.setAttribute("multiple", "multiple");
         label.textContent = "Click to select or drop multiple student script files";
         subtext.textContent = "Select individual student PDFs / images";
@@ -711,6 +1375,8 @@ async function handleIngestSubmit(e) {
         const pagesPerStudent = parseInt(document.getElementById("split-pages-per-student").value) || 2;
         const reversePages = document.getElementById("split-reverse-pages").checked;
         const reverseEntire = document.getElementById("split-reverse-entire").checked;
+        const trimLastPage = document.getElementById("split-trim-last-page") ? document.getElementById("split-trim-last-page").checked : false;
+        const trimPages = getSelectedTrimPagesString();
         
         btn.innerHTML = `<span class="inline-block animate-spin mr-2">⟳</span> Truncating & Auto-Parsing Student Documents...`;
         
@@ -719,6 +1385,10 @@ async function handleIngestSubmit(e) {
         formData.append("pages_per_student", pagesPerStudent);
         formData.append("reverse_pages_per_student", reversePages);
         formData.append("reverse_entire_scan", reverseEntire);
+        formData.append("trim_last_page", trimLastPage);
+        if (trimPages) {
+            formData.append("trim_pages", trimPages);
+        }
         formData.append("file", fileInput.files[0]);
         
         try {
@@ -748,9 +1418,16 @@ async function handleIngestSubmit(e) {
         }
     } else {
         // Mode 2: Multi-file batch upload
+        const multiTrimLast = document.getElementById("multi-trim-last-page") ? document.getElementById("multi-trim-last-page").checked : false;
+        const multiTrimPages = document.getElementById("multi-trim-pages") ? document.getElementById("multi-trim-pages").value.trim() : "";
+        
         btn.innerHTML = `<span class="inline-block animate-spin mr-2">⟳</span> Uploading & Auto-Parsing ${fileInput.files.length} Files...`;
         const formData = new FormData();
         formData.append("assignment_id", assignmentId);
+        formData.append("trim_last_page", multiTrimLast);
+        if (multiTrimPages) {
+            formData.append("trim_pages", multiTrimPages);
+        }
         for (let i = 0; i < fileInput.files.length; i++) {
             formData.append("files", fileInput.files[i]);
         }
@@ -1038,9 +1715,17 @@ async function loadReviewAssignmentsList() {
                             <div class="text-[11px] text-slate-400">
                                 Max Marks: <b class="text-white">${a.max_marks}</b>
                             </div>
-                            <button onclick="event.stopPropagation(); openReviewForAssignment(${a.id})" class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-md shadow-indigo-600/20">
-                                Review Assignment <i data-lucide="arrow-right" class="w-3.5 h-3.5"></i>
-                            </button>
+                            <div class="flex items-center gap-2">
+                                <button onclick="event.stopPropagation(); rerunPipelineSteps2And3ForAssignment(${a.id}, this)" title="Rerun Steps 2 & 3: Re-mark and re-annotate scripts with updated marking scheme" class="px-2.5 py-1.5 bg-violet-950 hover:bg-violet-900 text-violet-200 border border-violet-700/60 rounded-xl text-xs font-bold transition-all flex items-center gap-1 shadow-sm">
+                                    <i data-lucide="refresh-cw" class="w-3.5 h-3.5 text-violet-400"></i> Rerun 2 & 3
+                                </button>
+                                <button onclick="event.stopPropagation(); runBatchPipelineOnUnprocessed(${a.id}, this)" title="Run 3-step pipeline on all unprocessed student scripts in this assignment" class="px-2.5 py-1.5 bg-violet-950 hover:bg-violet-900 text-violet-200 border border-violet-700/60 rounded-xl text-xs font-bold transition-all flex items-center gap-1 shadow-sm">
+                                    <i data-lucide="fast-forward" class="w-3.5 h-3.5 text-violet-400"></i> Pipeline
+                                </button>
+                                <button onclick="event.stopPropagation(); openReviewForAssignment(${a.id})" class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-md shadow-indigo-600/20">
+                                    Review <i data-lucide="arrow-right" class="w-3.5 h-3.5"></i>
+                                </button>
+                            </div>
                         </div>
                     </div>
                 `;
@@ -1063,9 +1748,14 @@ async function loadReviewAssignmentsList() {
                                 <i data-lucide="check" class="w-3 h-3"></i> ${a.approved_submissions} / ${a.total_submissions} Approved (100%)
                             </span>
                         </div>
-                        <button onclick="event.stopPropagation(); openReviewForAssignment(${a.id})" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium shrink-0">
-                            View
-                        </button>
+                        <div class="flex items-center gap-1.5 shrink-0">
+                            <button onclick="event.stopPropagation(); rerunPipelineSteps2And3ForAssignment(${a.id}, this)" title="Rerun Steps 2 & 3: Re-mark and re-annotate with updated marking scheme" class="px-2 py-1 bg-violet-950 hover:bg-violet-900 text-violet-300 border border-violet-800 rounded-lg text-xs font-medium flex items-center gap-1 transition-all">
+                                <i data-lucide="refresh-cw" class="w-3 h-3 text-violet-400"></i> Rerun 2 & 3
+                            </button>
+                            <button onclick="event.stopPropagation(); openReviewForAssignment(${a.id})" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium">
+                                View
+                            </button>
+                        </div>
                     </div>
                 `).join("");
             } else {
@@ -1255,6 +1945,11 @@ async function openReviewForSubmission(submissionId) {
         if (nameInput) nameInput.value = currentSubmission.student_name || "";
         if (codeInput) codeInput.value = currentSubmission.student_code || "";
         
+        const markerSelect = document.getElementById("review-active-marker-select");
+        if (markerSelect) {
+            markerSelect.value = currentSubmission.assignment_marker_type || "auto";
+        }
+        
         // Highlight field if NOT in database
         updateStudentHighlightUI(currentSubmission.is_existing_student);
         
@@ -1377,8 +2072,10 @@ function updateStudentHighlightUI(isExisting) {
 
 async function saveStudentInfoCorrection() {
     if (!currentSubmission) return;
-    const name = document.getElementById("review-edit-student-name").value.trim();
-    const code = document.getElementById("review-edit-student-code").value.trim();
+    const nameEl = document.getElementById("review-edit-student-name");
+    const codeEl = document.getElementById("review-edit-student-code");
+    const name = nameEl ? (nameEl.value || "").trim() : (currentSubmission.student_name || "").trim();
+    const code = codeEl ? (codeEl.value || "").trim() : (currentSubmission.student_code || "").trim();
     
     if (!name) return;
     
@@ -1873,6 +2570,22 @@ function startAiLiveMonitor(stageName) {
     const stageText = document.getElementById("ai-monitor-stage-text");
     const timer = document.getElementById("ai-monitor-timer");
     const bar = document.getElementById("ai-monitor-progress-bar");
+
+    // Dashboard live monitor elements
+    const dashMonitor = document.getElementById("dashboard-live-monitor");
+    const dashPing = document.getElementById("dash-monitor-ping");
+    const dashDot = document.getElementById("dash-monitor-dot");
+    const dashStatus = document.getElementById("dash-monitor-status");
+    const dashStage = document.getElementById("dash-monitor-stage");
+    const dashTimer = document.getElementById("dash-monitor-timer");
+    const dashBar = document.getElementById("dash-monitor-bar");
+
+    if (dashMonitor) dashMonitor.classList.remove("hidden");
+    if (dashPing) dashPing.classList.remove("hidden");
+    if (dashDot) dashDot.className = "relative inline-flex rounded-full h-2 w-2 bg-amber-400";
+    if (dashStatus) dashStatus.innerHTML = `<span class="text-amber-400 font-bold">Pipeline Active</span>`;
+    if (dashStage) dashStage.textContent = stageName || "Processing with local AI...";
+    if (dashBar) dashBar.style.width = "30%";
     
     if (dot) dot.className = "relative inline-flex rounded-full h-3 w-3 bg-amber-400";
     if (ping) {
@@ -1888,6 +2601,7 @@ function startAiLiveMonitor(stageName) {
     monitorInterval = setInterval(async () => {
         const elapsed = ((Date.now() - monitorStartTime) / 1000).toFixed(1);
         if (timer) timer.textContent = `⏱️ ${elapsed}s`;
+        if (dashTimer) dashTimer.textContent = `⏱️ ${elapsed}s`;
         
         try {
             const resp = await fetch("/api/health/workload");
@@ -1905,31 +2619,139 @@ function startAiLiveMonitor(stageName) {
     }, 1200);
 }
 
-function updateAiLiveMonitorStage(stageName, percent) {
+function updateAiLiveMonitorStage(stageName, percent = null) {
     const stageText = document.getElementById("ai-monitor-stage-text");
     const bar = document.getElementById("ai-monitor-progress-bar");
+    const dashStage = document.getElementById("dash-monitor-stage");
+    const dashBar = document.getElementById("dash-monitor-bar");
+
     if (stageText) stageText.textContent = stageName;
-    if (bar) bar.style.width = `${percent}%`;
+    if (dashStage) dashStage.textContent = stageName;
+
+    if (percent !== null && percent !== undefined) {
+        if (bar) bar.style.width = `${percent}%`;
+        if (dashBar) dashBar.style.width = `${percent}%`;
+    }
 }
 
-function stopAiLiveMonitor(success = true, finalMsg = "") {
+// Alias for safe pipeline progress logging
+function updateAiLiveMonitorText(stageName, percent = null) {
+    updateAiLiveMonitorStage(stageName, percent);
+}
+
+// Fallback Event Notification Modal Handler
+function showFallbackNotice(fallbacks, contextTitle = "Automated AI Pipeline") {
+    if (!fallbacks || !Array.isArray(fallbacks) || fallbacks.length === 0) return;
+    const modal = document.getElementById("modal-fallback-notice");
+    const listContainer = document.getElementById("fallback-notice-list");
+    const subtitle = document.getElementById("fallback-notice-subtitle");
+    if (!modal || !listContainer) return;
+
+    if (subtitle) {
+        subtitle.textContent = `${contextTitle} triggered ${fallbacks.length} fallback event${fallbacks.length > 1 ? 's' : ''}`;
+    }
+
+    listContainer.innerHTML = fallbacks.map((fb, idx) => `
+        <div class="p-3 bg-slate-950/80 border border-amber-900/60 rounded-xl space-y-1.5 hover:border-amber-700/80 transition-all">
+            <div class="flex items-center justify-between gap-2">
+                <span class="font-bold text-amber-300 flex items-center gap-1.5 text-xs">
+                    <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+                    ${escapeHtml(fb.source || 'Pipeline Fallback')}
+                </span>
+                <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-950/90 text-amber-300 border border-amber-800/80">Event #${idx+1}</span>
+            </div>
+            <div class="text-slate-300 text-[11px] leading-snug">
+                <span class="text-slate-400 font-medium">Trigger:</span> ${escapeHtml(fb.trigger || 'Non-standard output or boundary clamping')}
+            </div>
+            <div class="text-slate-200 text-[11px] leading-snug bg-slate-900/80 p-2 rounded-lg border border-slate-800">
+                <span class="text-amber-400 font-semibold">Action Taken:</span> ${escapeHtml(fb.action || 'Applied fallback')}
+                ${fb.details ? `<div class="text-[10px] text-slate-400 mt-1 font-mono">${escapeHtml(fb.details)}</div>` : ''}
+            </div>
+        </div>
+    `).join("");
+
+    modal.classList.remove("hidden");
+    if (window.lucide) lucide.createIcons();
+}
+
+function closeFallbackNotice() {
+    const modal = document.getElementById("modal-fallback-notice");
+    if (modal) modal.classList.add("hidden");
+}
+
+function stopAiLiveMonitor(success = true, finalMsg = "", fallbackTriggered = false) {
     clearInterval(monitorInterval);
     const dot = document.getElementById("ai-monitor-dot");
     const ping = document.getElementById("ai-monitor-ping");
     const statusText = document.getElementById("ai-monitor-status-text");
     const stageText = document.getElementById("ai-monitor-stage-text");
     const bar = document.getElementById("ai-monitor-progress-bar");
+
+    // Dashboard live monitor elements
+    const dashMonitor = document.getElementById("dashboard-live-monitor");
+    const dashPing = document.getElementById("dash-monitor-ping");
+    const dashDot = document.getElementById("dash-monitor-dot");
+    const dashStatus = document.getElementById("dash-monitor-status");
+    const dashStage = document.getElementById("dash-monitor-stage");
+    const dashBar = document.getElementById("dash-monitor-bar");
     
     if (ping) ping.classList.add("hidden");
-    if (dot) dot.className = `relative inline-flex rounded-full h-3 w-3 ${success ? 'bg-emerald-500' : 'bg-rose-500'}`;
-    if (statusText) statusText.innerHTML = success ? `<span class="text-emerald-400 font-bold">Completed Ready</span>` : `<span class="text-rose-400 font-bold">Error</span>`;
+    if (dashPing) dashPing.classList.add("hidden");
+
+    if (dot) {
+        if (!success) {
+            dot.className = "relative inline-flex rounded-full h-3 w-3 bg-rose-500";
+        } else if (fallbackTriggered) {
+            dot.className = "relative inline-flex rounded-full h-3 w-3 bg-amber-500";
+        } else {
+            dot.className = "relative inline-flex rounded-full h-3 w-3 bg-emerald-500";
+        }
+    }
+    if (dashDot) {
+        if (!success) {
+            dashDot.className = "relative inline-flex rounded-full h-2 w-2 bg-rose-500";
+        } else if (fallbackTriggered) {
+            dashDot.className = "relative inline-flex rounded-full h-2 w-2 bg-amber-500";
+        } else {
+            dashDot.className = "relative inline-flex rounded-full h-2 w-2 bg-emerald-500";
+        }
+    }
+
+    if (statusText) {
+        if (!success) {
+            statusText.innerHTML = `<span class="text-rose-400 font-bold">Error</span>`;
+        } else if (fallbackTriggered) {
+            statusText.innerHTML = `<span class="text-amber-400 font-bold">Completed (With Fallback)</span>`;
+        } else {
+            statusText.innerHTML = `<span class="text-emerald-400 font-bold">Completed Ready</span>`;
+        }
+    }
+    if (dashStatus) {
+        if (!success) {
+            dashStatus.innerHTML = `<span class="text-rose-400 font-bold">Error</span>`;
+        } else if (fallbackTriggered) {
+            dashStatus.innerHTML = `<span class="text-amber-400 font-bold">Done (Fallback)</span>`;
+        } else {
+            dashStatus.innerHTML = `<span class="text-emerald-400 font-bold">Completed</span>`;
+        }
+    }
+
     if (stageText) stageText.textContent = finalMsg || (success ? "Finished. You can review and edit marks." : "Operation failed.");
+    if (dashStage) dashStage.textContent = finalMsg || (success ? "Pipeline complete!" : "Operation failed.");
     if (bar) bar.style.width = success ? "100%" : "0%";
+    if (dashBar) dashBar.style.width = success ? "100%" : "0%";
+
+    if (dashMonitor && success) {
+        setTimeout(() => {
+            if (dashMonitor) dashMonitor.classList.add("hidden");
+        }, 5000);
+    }
 }
 
 async function ensureStudentNameParsedBeforeGrading() {
     const nameInput = document.getElementById("review-edit-student-name");
-    const currentName = nameInput.value.trim();
+    if (!nameInput) return;
+    const currentName = (nameInput.value || "").trim();
     if (!currentName || currentName === "Student Script" || currentName.startsWith("Student Script")) {
         startAiLiveMonitor("Pre-Check: Auto-parsing student name from Page 1...");
         await triggerAutoDetectName();
@@ -1947,10 +2769,11 @@ async function triggerStep1Extraction() {
     startAiLiveMonitor("Step 1: Extracting student handwritten answers, diagram labels, & graphs verbatim...");
     
     try {
+        const activeMarker = document.getElementById("review-active-marker-select")?.value || "auto";
         const resp = await fetch(`/api/submissions/${currentSubmission.id}/extract`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ vision_model: model })
+            body: JSON.stringify({ vision_model: model, marker_type: activeMarker })
         });
         let data = {};
         try {
@@ -1960,7 +2783,11 @@ async function triggerStep1Extraction() {
         }
         
         if (resp.ok && data.success) {
-            stopAiLiveMonitor(true, `Step 1 Complete: ${data.results?.questions?.length || 0} student responses extracted verbatim. Review the text below, make any edits, then click Step 2.`);
+            const hasFb = Boolean(data.fallback_triggered && data.fallbacks && data.fallbacks.length > 0);
+            stopAiLiveMonitor(true, `Step 1 Complete: ${data.results?.questions?.length || 0} student responses extracted verbatim. Review the text below, make any edits, then click Step 2.`, hasFb);
+            if (hasFb) {
+                showFallbackNotice(data.fallbacks, "Step 1 Extraction");
+            }
             openReviewForSubmission(currentSubmission.id);
         } else {
             stopAiLiveMonitor(false, "Step 1 failed: " + (data.detail || JSON.stringify(data)));
@@ -1992,12 +2819,14 @@ async function triggerStep2MarkAndComment() {
     startAiLiveMonitor("Step 2: Scoring responses against rubrics & synthesizing teacher remarks...");
     
     try {
+        const activeMarker = document.getElementById("review-active-marker-select")?.value || "auto";
         const resp = await fetch(`/api/submissions/${currentSubmission.id}/mark-and-comment`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 reasoning_model: model,
-                questions: formData.questions
+                questions: formData.questions,
+                marker_type: activeMarker
             })
         });
         let data = {};
@@ -2008,7 +2837,11 @@ async function triggerStep2MarkAndComment() {
         }
         
         if (resp.ok && data.success) {
-            stopAiLiveMonitor(true, `Step 2 Complete: Scored ${data.results?.total_score} / ${data.results?.max_marks} marks and generated teacher remarks.`);
+            const hasFb = Boolean(data.fallback_triggered && data.fallbacks && data.fallbacks.length > 0);
+            stopAiLiveMonitor(true, `Step 2 Complete: Scored ${data.results?.total_score} / ${data.results?.max_marks} marks and generated teacher remarks.`, hasFb);
+            if (hasFb) {
+                showFallbackNotice(data.fallbacks, "Step 2 Mark & Comment");
+            }
             openReviewForSubmission(currentSubmission.id);
         } else {
             stopAiLiveMonitor(false, "Step 2 failed: " + (data.detail || JSON.stringify(data)));
@@ -2033,6 +2866,7 @@ async function triggerDoAll() {
     startAiLiveMonitor("Do All Pipeline: Extracting verbatim text ➔ Scoring against rubrics ➔ Synthesizing remarks...");
     
     try {
+        const activeMarker = document.getElementById("review-active-marker-select")?.value || "auto";
         const resp = await fetch(`/api/submissions/${currentSubmission.id}/grade`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -2050,7 +2884,11 @@ async function triggerDoAll() {
         }
         
         if (resp.ok && data.success) {
-            stopAiLiveMonitor(true, "Full Automated Marking Complete! Review and click Approve & Finalize.");
+            const hasFb = Boolean(data.fallback_triggered && data.fallbacks && data.fallbacks.length > 0);
+            stopAiLiveMonitor(true, "Full Automated Marking Complete! Review and click Approve & Finalize.", hasFb);
+            if (hasFb) {
+                showFallbackNotice(data.fallbacks, "Do All Grading Pipeline");
+            }
             openReviewForSubmission(currentSubmission.id);
         } else {
             stopAiLiveMonitor(false, "AI marking failed: " + (data.detail || JSON.stringify(data)));
@@ -2069,6 +2907,440 @@ const triggerStep1AExtraction = triggerStep1Extraction;
 const triggerStep1BMarking = triggerStep2MarkAndComment;
 const triggerStep2Remarks = triggerStep2MarkAndComment;
 const triggerAiMarkingCurrent = triggerDoAll;
+
+async function runPipelineForCurrentSubmission(forceAll = false, forceSteps2And3 = false) {
+    if (!currentSubmission || !currentSubmission.id) {
+        alert("No active student submission loaded.");
+        return;
+    }
+
+    const btn = document.getElementById("btn-run-3step-pipeline") || document.getElementById("btn-do-all");
+    const rerunBtn = document.getElementById("btn-rerun-steps2-3-submission");
+    const origBtnHtml = btn ? btn.innerHTML : "";
+    const origRerunBtnHtml = rerunBtn ? rerunBtn.innerHTML : "";
+
+    const allStepsDone = Boolean(currentSubmission.step1_done && currentSubmission.step2_done && currentSubmission.step3_done);
+    let forceSteps = [];
+
+    if (forceSteps2And3) {
+        forceSteps = ["step2", "step3"];
+    } else if (allStepsDone && !forceAll) {
+        const rerun = confirm(
+            `All 3 steps are already completed for ${currentSubmission.student_name || 'this student'}.\n\n` +
+            `Would you like to rerun Steps 2 & 3 (Re-mark & Direct Mark against updated marking scheme, preserving extracted handwriting)?`
+        );
+        if (!rerun) {
+            return;
+        }
+        forceSteps = ["step2", "step3"];
+    } else if (forceAll) {
+        forceSteps = ["step1", "step2", "step3"];
+    }
+
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Running...`;
+    }
+    if (rerunBtn) {
+        rerunBtn.disabled = true;
+        rerunBtn.innerHTML = `<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Running...`;
+    }
+    if (window.lucide) lucide.createIcons();
+
+    startAiLiveMonitor(`3-Step Pipeline: Checking & running steps for ${currentSubmission.student_name || 'student'}...`);
+
+    try {
+        try {
+            await ensureStudentNameParsedBeforeGrading();
+            await saveStudentInfoCorrection();
+        } catch (preErr) {
+            console.warn("Pre-grading check warning:", preErr);
+        }
+
+        if (!forceSteps || forceSteps.length === 0 || forceSteps.includes('step3') || forceSteps.includes('step2')) {
+            currentAnnotations = [];
+            if (currentSubmission) currentSubmission.annotations = [];
+            renderDirectMarkingOverlay();
+        }
+
+        const activeMarker = document.getElementById("review-active-marker-select")?.value || "auto";
+        const resp = await fetch(`/api/submissions/${currentSubmission.id}/run-pipeline`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                vision_model: "qwen3.8:latest",
+                reasoning_model: "qwen3.8:latest",
+                marker_type: activeMarker,
+                force_steps: forceSteps
+            })
+        });
+
+        let data = {};
+        try {
+            data = await resp.json();
+        } catch (e) {
+            data = { detail: resp.statusText || "Server error" };
+        }
+
+        if (resp.ok && data.success) {
+            const executed = data.steps_executed || [];
+            const skipped = data.steps_skipped || [];
+            const hasFb = Boolean(data.fallback_triggered && data.fallbacks && data.fallbacks.length > 0);
+
+            let summary = "3-Step Pipeline finished! ";
+            if (executed.length > 0) {
+                summary += `Executed: ${executed.join(", ")}. `;
+            }
+            if (skipped.length > 0) {
+                summary += `Skipped (already done): ${skipped.join(", ")}.`;
+            }
+            if (executed.length === 0 && skipped.length > 0) {
+                summary = "All 3 steps were already completed for this script!";
+            }
+
+            stopAiLiveMonitor(true, summary, hasFb);
+            if (hasFb) {
+                showFallbackNotice(data.fallbacks, "3-Step Pipeline");
+            }
+            await openReviewForSubmission(currentSubmission.id);
+        } else {
+            stopAiLiveMonitor(false, "3-Step Pipeline failed: " + (data.detail || JSON.stringify(data)));
+            alert("3-Step Pipeline failed: " + (data.detail || JSON.stringify(data)));
+        }
+    } catch (err) {
+        stopAiLiveMonitor(false, "Pipeline error: " + err.message);
+        alert("Pipeline error: " + err.message);
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = origBtnHtml || `<i data-lucide="fast-forward" class="w-3.5 h-3.5"></i> Run 3-Step Pipeline`;
+        }
+        if (rerunBtn) {
+            rerunBtn.disabled = false;
+            rerunBtn.innerHTML = origRerunBtnHtml || `<i data-lucide="refresh-cw" class="w-3.5 h-3.5 text-violet-400"></i> Rerun 2 & 3`;
+        }
+        if (window.lucide) lucide.createIcons();
+    }
+}
+
+async function runSingleSubmissionPipelineFromQueue(submissionId) {
+    if (!submissionId) return;
+
+    startAiLiveMonitor(`3-Step Pipeline: Checking & running steps for submission #${submissionId}...`);
+
+    try {
+        const resp = await fetch(`/api/submissions/${submissionId}/run-pipeline`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                vision_model: "qwen3.8:latest",
+                reasoning_model: "qwen3.8:latest"
+            })
+        });
+
+        const data = await resp.json();
+        if (resp.ok && data.success) {
+            const executed = data.steps_executed || [];
+            const skipped = data.steps_skipped || [];
+            const hasFb = Boolean(data.fallback_triggered && data.fallbacks && data.fallbacks.length > 0);
+
+            let summary = `Pipeline finished for ${data.student_name || 'student'}! `;
+            if (executed.length > 0) summary += `Ran: ${executed.join(', ')}. `;
+            if (skipped.length > 0) summary += `Skipped: ${skipped.join(', ')}.`;
+
+            stopAiLiveMonitor(true, summary, hasFb);
+            loadQuickReviewQueue();
+            loadDashboardData();
+        } else {
+            stopAiLiveMonitor(false, "Pipeline failed: " + (data.detail || data.error || JSON.stringify(data)));
+            alert("Pipeline failed: " + (data.detail || data.error || JSON.stringify(data)));
+        }
+    } catch (err) {
+        stopAiLiveMonitor(false, "Pipeline error: " + err.message);
+        alert("Pipeline error: " + err.message);
+    }
+}
+
+async function runPipelineForCurrentAssignment(btnElem = null) {
+    const aid = currentSubmission?.assignment_id || document.getElementById("review-assignment-selector")?.value;
+    if (!aid) {
+        alert("No assignment selected.");
+        return;
+    }
+    await runBatchPipelineOnUnprocessed(aid, btnElem);
+}
+
+async function rerunPipelineSteps2And3ForCurrentAssignment(btnElem = null) {
+    const aid = currentSubmission?.assignment_id || document.getElementById("review-assignment-selector")?.value;
+    if (!aid) {
+        alert("No assignment selected.");
+        return;
+    }
+    await rerunPipelineSteps2And3ForAssignment(aid, btnElem);
+}
+
+async function rerunPipelineSteps2And3ForAssignment(assignmentId, btnElem = null, event = null) {
+    if (event) event.stopPropagation();
+    if (!assignmentId) {
+        alert("No assignment ID provided.");
+        return;
+    }
+
+    const origBtnHtml = btnElem ? btnElem.innerHTML : "";
+    if (btnElem) {
+        btnElem.disabled = true;
+        btnElem.innerHTML = `<i data-lucide="loader-2" class="w-3 h-3 animate-spin"></i> Checking...`;
+        if (window.lucide) lucide.createIcons();
+    }
+
+    try {
+        startAiLiveMonitor("Loading assignment submissions for Pipeline Steps 2 & 3 rerun...");
+        const resp = await fetch(`/api/submissions/assignment/${assignmentId}`);
+        const subs = await resp.json();
+        if (!subs || subs.length === 0) {
+            stopAiLiveMonitor(true, "No student submissions found for this assignment.");
+            alert("No student submissions found for this assignment.");
+            return;
+        }
+
+        const aTitle = subs[0]?.assignment_title || `Assignment #${assignmentId}`;
+        const hasExtractedCount = subs.filter(s => s.step1_done).length;
+        const confirmMsg = 
+            `Rerun Pipeline Steps 2 & 3 (Re-mark & Re-annotate) for "${aTitle}"?\n\n` +
+            `• Target submissions: ${subs.length}\n` +
+            `• Preserves verbatim extracted handwriting (Step 1) for ${hasExtractedCount} script(s).\n` +
+            `• Scores and direct annotations will re-evaluate against the latest marking scheme & rubrics.\n\n` +
+            `Proceed?`;
+
+        if (!confirm(confirmMsg)) {
+            stopAiLiveMonitor(true, "Pipeline rerun cancelled.");
+            return;
+        }
+
+        if (btnElem) {
+            btnElem.innerHTML = `<i data-lucide="loader-2" class="w-3 h-3 animate-spin"></i> Rerunning...`;
+            if (window.lucide) lucide.createIcons();
+        }
+
+        startAiLiveMonitor(`Rerunning Pipeline (Steps 2 & 3) for ${subs.length} script(s)...`);
+
+        let successCount = 0;
+        let failCount = 0;
+        const allFallbacks = [];
+
+        for (let i = 0; i < subs.length; i++) {
+            const sub = subs[i];
+            const sName = sub.student_name || `Submission #${sub.id}`;
+            const pct = Math.round(((i + 1) / subs.length) * 100);
+            updateAiLiveMonitorText(`[${i + 1}/${subs.length}] Re-marking & re-annotating ${sName}... (Preserving OCR)`, pct);
+
+            try {
+                const pipeResp = await fetch(`/api/submissions/${sub.id}/run-pipeline`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        vision_model: "qwen3.8:latest",
+                        reasoning_model: "qwen3.8:latest",
+                        force_steps: ["step2", "step3"]
+                    })
+                });
+                const data = await pipeResp.json();
+                if (pipeResp.ok && data.success) {
+                    successCount++;
+                    if (data.fallback_triggered && data.fallbacks) {
+                        allFallbacks.push(...data.fallbacks);
+                    }
+                } else {
+                    failCount++;
+                    console.warn(`Pipeline rerun failed for submission ${sub.id}:`, data);
+                }
+            } catch (err) {
+                failCount++;
+                console.error(`Pipeline rerun network error for submission ${sub.id}:`, err);
+            }
+
+            if (i < subs.length - 1) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+        }
+
+        const hasFb = allFallbacks.length > 0;
+        const finalMsg = `Rerun Steps 2 & 3 complete! Successfully re-marked: ${successCount}, Failed: ${failCount}.`;
+        stopAiLiveMonitor(failCount === 0, finalMsg, hasFb);
+        if (hasFb) {
+            showFallbackNotice(allFallbacks, "Rerun Pipeline (Steps 2 & 3)");
+        }
+
+        // Refresh UI
+        loadDashboardData();
+        loadQuickReviewQueue();
+        loadAssignments();
+        if (document.getElementById("view-review") && !document.getElementById("view-review").classList.contains("hidden")) {
+            loadReviewAssignmentsList();
+            if (currentSubmission && currentSubmission.assignment_id === assignmentId) {
+                openReviewForSubmission(currentSubmission.id);
+            }
+        }
+    } catch (e) {
+        stopAiLiveMonitor(false, "Pipeline rerun failed: " + e.message);
+        alert("Pipeline rerun failed: " + e.message);
+    } finally {
+        if (btnElem) {
+            btnElem.disabled = false;
+            btnElem.innerHTML = origBtnHtml;
+            if (window.lucide) lucide.createIcons();
+        }
+    }
+}
+
+async function runBatchPipelineOnUnprocessed(assignmentId = null, btnElem = null) {
+    const dashBtn = document.getElementById("btn-dashboard-run-pipeline");
+    const reviewBtn = document.getElementById("btn-review-run-all-pipeline");
+    const origDashHtml = dashBtn ? dashBtn.innerHTML : "";
+    const origReviewHtml = reviewBtn ? reviewBtn.innerHTML : "";
+    const origBtnElemHtml = btnElem ? btnElem.innerHTML : "";
+
+    if (dashBtn) {
+        dashBtn.disabled = true;
+        dashBtn.innerHTML = `<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Scanning...`;
+    }
+    if (reviewBtn) {
+        reviewBtn.disabled = true;
+        reviewBtn.innerHTML = `<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Scanning...`;
+    }
+    if (btnElem) {
+        btnElem.disabled = true;
+        btnElem.innerHTML = `<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Scanning...`;
+    }
+    if (window.lucide) lucide.createIcons();
+
+    let pendingSubs = [];
+    startAiLiveMonitor("Scanning for unprocessed student submissions across pipeline steps...");
+
+    try {
+        if (assignmentId) {
+            const resp = await fetch(`/api/submissions/assignment/${assignmentId}`);
+            const subs = await resp.json();
+            pendingSubs = (subs || []).filter(s => s.status !== "approved" && !s.is_pipeline_complete);
+        } else {
+            const aResp = await fetch("/api/assignments");
+            const assignments = await aResp.json();
+            // Fetch all assignments in parallel for fast response
+            const subsResults = await Promise.all(
+                (assignments || []).map(async a => {
+                    try {
+                        const sResp = await fetch(`/api/submissions/assignment/${a.id}`);
+                        const subs = await sResp.json();
+                        const unproc = (subs || []).filter(s => s.status !== "approved" && !s.is_pipeline_complete);
+                        unproc.forEach(s => s.assignment_title = a.title);
+                        return unproc;
+                    } catch (e) {
+                        return [];
+                    }
+                })
+            );
+            pendingSubs = subsResults.flat();
+        }
+    } catch (e) {
+        stopAiLiveMonitor(false, "Failed to scan submissions: " + e.message);
+        alert("Failed to scan unprocessed works: " + e.message);
+        if (dashBtn) { dashBtn.disabled = false; dashBtn.innerHTML = origDashHtml; }
+        if (reviewBtn) { reviewBtn.disabled = false; reviewBtn.innerHTML = origReviewHtml; }
+        if (btnElem) { btnElem.disabled = false; btnElem.innerHTML = origBtnElemHtml; }
+        if (window.lucide) lucide.createIcons();
+        return;
+    }
+
+    if (pendingSubs.length === 0) {
+        stopAiLiveMonitor(true, "All student works are already fully processed through the 3-step pipeline! 🎉");
+        alert("All student works are already fully processed through the 3-step pipeline! 🎉");
+        if (dashBtn) { dashBtn.disabled = false; dashBtn.innerHTML = origDashHtml; }
+        if (reviewBtn) { reviewBtn.disabled = false; reviewBtn.innerHTML = origReviewHtml; }
+        if (btnElem) { btnElem.disabled = false; btnElem.innerHTML = origBtnElemHtml; }
+        if (window.lucide) lucide.createIcons();
+        return;
+    }
+
+    const scopeName = assignmentId ? "this assignment" : "all classes";
+    const confirmMsg = `Found ${pendingSubs.length} unprocessed student script(s) in ${scopeName}.\n\nRun them through the 3-step pipeline? Completed steps will be automatically skipped for each script.`;
+    if (!confirm(confirmMsg)) {
+        stopAiLiveMonitor(true, "Batch pipeline cancelled.");
+        if (dashBtn) { dashBtn.disabled = false; dashBtn.innerHTML = origDashHtml; }
+        if (reviewBtn) { reviewBtn.disabled = false; reviewBtn.innerHTML = origReviewHtml; }
+        if (btnElem) { btnElem.disabled = false; btnElem.innerHTML = origBtnElemHtml; }
+        if (window.lucide) lucide.createIcons();
+        return;
+    }
+
+    if (dashBtn) dashBtn.innerHTML = `<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Processing...`;
+    if (reviewBtn) reviewBtn.innerHTML = `<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Processing...`;
+    if (btnElem) btnElem.innerHTML = `<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Processing...`;
+    if (window.lucide) lucide.createIcons();
+
+    startAiLiveMonitor(`Running 3-Step Pipeline on ${pendingSubs.length} student work(s)...`);
+
+    let successCount = 0;
+    let failCount = 0;
+    const allFallbacks = [];
+
+    try {
+        for (let i = 0; i < pendingSubs.length; i++) {
+            const sub = pendingSubs[i];
+            const studentName = sub.student_name || `Submission #${sub.id}`;
+            const pct = Math.round(((i + 1) / pendingSubs.length) * 100);
+            updateAiLiveMonitorText(`[${i + 1}/${pendingSubs.length}] Processing ${studentName}... (Skipping completed steps)`, pct);
+
+            try {
+                const resp = await fetch(`/api/submissions/${sub.id}/run-pipeline`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        vision_model: "qwen3.8:latest",
+                        reasoning_model: "qwen3.8:latest"
+                    })
+                });
+                const data = await resp.json();
+                if (resp.ok && data.success) {
+                    successCount++;
+                    if (data.fallback_triggered && data.fallbacks) {
+                        allFallbacks.push(...data.fallbacks);
+                    }
+                } else {
+                    failCount++;
+                    console.warn(`Pipeline failed for submission ${sub.id}:`, data);
+                }
+            } catch (err) {
+                failCount++;
+                console.error(`Pipeline network error for submission ${sub.id}:`, err);
+            }
+
+            if (i < pendingSubs.length - 1) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+        }
+    } finally {
+        if (dashBtn) { dashBtn.disabled = false; dashBtn.innerHTML = origDashHtml; }
+        if (reviewBtn) { reviewBtn.disabled = false; reviewBtn.innerHTML = origReviewHtml; }
+        if (btnElem) { btnElem.disabled = false; btnElem.innerHTML = origBtnElemHtml; }
+        if (window.lucide) lucide.createIcons();
+    }
+
+    const hasFb = allFallbacks.length > 0;
+    stopAiLiveMonitor(failCount === 0, `3-Step Pipeline complete! Successfully processed: ${successCount}, Failed: ${failCount}`, hasFb);
+    if (hasFb) {
+        showFallbackNotice(allFallbacks, "Batch 3-Step Marking Pipeline");
+    }
+
+    // Refresh UI
+    loadDashboardData();
+    loadQuickReviewQueue();
+    if (document.getElementById("view-review") && !document.getElementById("view-review").classList.contains("hidden")) {
+        loadReviewAssignmentsList();
+        if (currentSubmission && currentSubmission.id) {
+            openReviewForSubmission(currentSubmission.id);
+        }
+    }
+}
 
 async function saveGradingDraft() {
     if (!currentSubmission) return;
@@ -2177,8 +3449,20 @@ function renderDirectMarkingOverlay() {
         const ymax = Number(bbox[2]);
         const xmax = Number(bbox[3]);
         const type = (ann.type || "tick").toLowerCase();
-        const remark = ann.remark || "";
+        let remark = ann.remark || "";
         const score  = ann.score  || "";
+
+        // Strip question number prefixes: Q1:, Q(a):, Q2(b) [0/2]:, (a):, Page 7:, etc.
+        if (remark && !remark.startsWith("*")) {
+            remark = remark.replace(/^(?:(?:Question|Q|Page)\s*[0-9a-zA-Z()_-]+|\([a-zA-Z0-9_-]+\))\s*(?:\[[^\]]*\])?\s*[:\-–|]\s*/i, '').trim();
+            remark = remark.replace(/^\[[0-9./\s]+(?:marks?)?\]\s*[:\-–]?\s*/i, '').trim();
+            remark = remark.replace(/^\[[✓✗\s\w]+\]\s*[:\-–]?\s*/i, '').trim();
+            remark = remark.replace(/^[•\-*]\s*(?:Step\s*\d+|Criterion\s*\d+)?\s*(?::\s*)?(?:[0-9./\s]+)?\s*/i, '').trim();
+            remark = remark.replace(/^[✓✗\s]*(?:Correct|Error|Incorrect|Partial Credit)\s*[:\-–|.]\s*/i, '').trim();
+            remark = remark.replace(/\s*(?:for\s+)?\b(?:Question|Q)\b\s*[0-9a-zA-Z()_-]+(?:\s*\([a-zA-Z0-9_-]+\))?/i, '').trim();
+        }
+
+        const fullTooltip = ann.original_remark || remark || (score ? `Score: ${score}` : '');
 
         // Standardise symbol size
         const lineH = Math.max(18, ymax - ymin);
@@ -2186,65 +3470,246 @@ function renderDirectMarkingOverlay() {
         const midY = ymin + (ymax - ymin) * 0.5;
         const sw = 2.5;
 
-        if (type === "tick") {
-            // Estimate text width: ~10 units per char
-            const estTextW = remark ? remark.length * 10 : 0;
-            const maxSx = remark ? (1000 - 18 - 8 - estTextW - 10) : 910;
-            // Tick placed immediately after the answer word, or at xmin for checklist items
-            const sx = remark ? Math.min(maxSx, xmin) : Math.min(maxSx, xmax + 4);
-            const sy = midY - sym * 0.5;
-            markup += `
-                <g class="annotation-item" data-id="${ann.id || idx}">
-                    <path d="M ${sx} ${sy + sym*0.55} L ${sx + sym*0.38} ${sy + sym*0.95} L ${sx + sym} ${sy}" fill="none" stroke="#dc2626" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"/>
-                </g>
-            `;
-            if (score) {
-                // Fixed margin for scores, ~4% from the right edge
-                const scoreX = 960; 
-                markup += `<text x="${scoreX}" y="${sy + sym*0.75}" class="font-bold fill-red-600 text-[15px]" style="font-family: Arial, sans-serif;">${escapeHtml(String(score))}</text>`;
+        const wrapSvgText = (text, startX, centerY, charsPerLine = 14, lineSpacing = 15) => {
+            const raw = String(text || "").trim();
+            if (!raw) return "";
+            const lines = [];
+            for (let i = 0; i < raw.length; i += charsPerLine) {
+                lines.push(raw.slice(i, i + charsPerLine));
             }
-            if (remark) {
-                markup += `<text x="${sx + sym + 8}" y="${sy + sym*0.75}" class="font-bold fill-red-600 text-[15px]" style="font-family: Arial, sans-serif;">${escapeHtml(remark)}</text>`;
+            const totalH = (lines.length - 1) * lineSpacing;
+            const startY = centerY - (totalH / 2) + 4;
+            let tspans = "";
+            lines.forEach((l, idx) => {
+                tspans += `<tspan x="${startX}" y="${startY + idx * lineSpacing}">${escapeHtml(l)}</tspan>`;
+            });
+            return tspans;
+        };
+
+        const isChecklist = !!ann.is_graph_checklist;
+
+        if (ann.suppress_symbol) {
+            // Overall graph or composite question score at margin without orphan symbol
+            if (score) {
+                const isCritOrLeft = !!ann.is_criterion || xmax < 750;
+                const scoreX = isCritOrLeft ? Math.min(880, xmax + 6) : 955;
+                const anchor = isCritOrLeft ? "start" : "end";
+                markup += `<text x="${scoreX}" y="${midY + 5}" class="font-bold fill-red-600 text-[15px]" style="font-family: Arial, sans-serif;" text-anchor="${anchor}">${escapeHtml(String(score))}</text>`;
+            }
+
+        } else if (type === "tick") {
+            if (isChecklist) {
+                // Graph checklist row: tick symbol with criterion name and score beside it
+                const sx = Math.max(20, Math.min(880, xmin));
+                const sy = midY - sym * 0.5;
+                markup += `
+                    <g class="annotation-item cursor-pointer" data-id="${ann.id || idx}">
+                        <title>${escapeHtml(fullTooltip)}</title>
+                        <path d="M ${sx} ${sy + sym*0.55} L ${sx + sym*0.38} ${sy + sym*0.95} L ${sx + sym} ${sy}" fill="none" stroke="#dc2626" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"/>
+                        <text x="${sx + sym + 8}" y="${midY + 5}" class="font-bold fill-red-600 text-[13px]" style="font-family: Arial, sans-serif;"><title>${escapeHtml(fullTooltip)}</title>${escapeHtml(remark || '✓ Point awarded')}</text>
+                    </g>
+                `;
+            } else {
+                // Regular tick anchored to student answer
+                const isSingleLetterMcq = (xmax > 700) && ((xmax - xmin) < 50);
+                const extraOffset = isSingleLetterMcq ? 16 : 4;
+                const targetSx = (xmax > xmin) ? (xmax + extraOffset) : (xmin + 30);
+                const sx = Math.max(20, Math.min(880, targetSx));
+                const sy = midY - sym * 0.5;
+                const tooltip = fullTooltip || (score ? `Score: ${score}` : '✓ Correct');
+                markup += `
+                    <g class="annotation-item cursor-pointer" data-id="${ann.id || idx}">
+                        <title>${escapeHtml(tooltip)}</title>
+                        <path d="M ${sx} ${sy + sym*0.55} L ${sx + sym*0.38} ${sy + sym*0.95} L ${sx + sym} ${sy}" fill="none" stroke="#dc2626" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"/>
+                    </g>
+                `;
+                if (score) {
+                    const isCritOrLeft = !!ann.is_criterion || xmax < 750 || (sx + sym + 45 < 950);
+                    const scoreX = isCritOrLeft ? Math.min(890, sx + sym + 6) : 955;
+                    const anchor = isCritOrLeft ? "start" : "end";
+                    markup += `<text x="${scoreX}" y="${midY + 5}" class="font-bold fill-red-600 text-[15px]" style="font-family: Arial, sans-serif;" text-anchor="${anchor}">${escapeHtml(String(score))}</text>`;
+                }
             }
 
         } else if (type === "cross") {
-            const estTextW = remark ? remark.length * 10 : 0;
-            const maxSx = remark ? (1000 - 18 - 8 - estTextW - 10) : 910;
-            // Cross placed immediately after the answer word, or at xmin for checklist items
-            const sx = remark ? Math.min(maxSx, xmin) : Math.min(maxSx, xmax + 4);
-            const sy = midY - sym * 0.5;
-            const h = sym;
-            markup += `
-                <g class="annotation-item" data-id="${ann.id || idx}">
-                    <line x1="${sx}"   y1="${sy}"   x2="${sx+h}" y2="${sy+h}" stroke="#dc2626" stroke-width="${sw}" stroke-linecap="round"/>
-                    <line x1="${sx+h}" y1="${sy}"   x2="${sx}"   y2="${sy+h}" stroke="#dc2626" stroke-width="${sw}" stroke-linecap="round"/>
-                </g>
-            `;
-            // Score at right margin, same row
-            if (score) {
-                markup += `<text x="955" y="${midY + 5}" fill="#dc2626" font-size="15" font-weight="700" font-family="Arial, sans-serif" text-anchor="end">${escapeHtml(score)}</text>`;
-            }
-            // Remark beside cross
-            if (remark) {
-                markup += `<text x="${sx + sym + 8}" y="${midY + 5}" fill="#dc2626" font-size="14" font-weight="600" font-family="Arial, sans-serif">${escapeHtml(remark)}</text>`;
+            if (isChecklist) {
+                // Graph checklist row: cross symbol with criterion name and score beside it
+                const sx = Math.max(20, Math.min(880, xmin));
+                const sy = midY - sym * 0.5;
+                const h = sym;
+                markup += `
+                    <g class="annotation-item cursor-pointer" data-id="${ann.id || idx}">
+                        <title>${escapeHtml(fullTooltip)}</title>
+                        <line x1="${sx}"   y1="${sy}"   x2="${sx+h}" y2="${sy+h}" stroke="#dc2626" stroke-width="${sw}" stroke-linecap="round"/>
+                        <line x1="${sx+h}" y1="${sy}"   x2="${sx}"   y2="${sy+h}" stroke="#dc2626" stroke-width="${sw}" stroke-linecap="round"/>
+                        <text x="${sx + sym + 8}" y="${midY + 5}" fill="#dc2626" font-size="13" font-weight="600" font-family="Arial, sans-serif"><title>${escapeHtml(fullTooltip)}</title>${escapeHtml(remark || '✗ Not met')}</text>
+                    </g>
+                `;
+            } else {
+                // Regular cross anchored to student answer
+                const isSingleLetterMcq = (xmax > 700) && ((xmax - xmin) < 50);
+                const extraOffset = isSingleLetterMcq ? 16 : 4;
+                const targetSx = (xmax > xmin) ? (xmax + extraOffset) : (xmin + 30);
+                const sx = Math.max(20, Math.min(880, targetSx));
+                const sy = midY - sym * 0.5;
+                const h = sym;
+                const tooltip = fullTooltip || (score ? `Score: ${score}` : '✗ Incorrect');
+                markup += `
+                    <g class="annotation-item cursor-pointer" data-id="${ann.id || idx}">
+                        <title>${escapeHtml(tooltip)}</title>
+                        <line x1="${sx}"   y1="${sy}"   x2="${sx+h}" y2="${sy+h}" stroke="#dc2626" stroke-width="${sw}" stroke-linecap="round"/>
+                        <line x1="${sx+h}" y1="${sy}"   x2="${sx}"   y2="${sy+h}" stroke="#dc2626" stroke-width="${sw}" stroke-linecap="round"/>
+                    </g>
+                `;
+                if (score) {
+                    const isCritOrLeft = !!ann.is_criterion || xmax < 750 || (sx + sym + 45 < 950);
+                    const scoreX = isCritOrLeft ? Math.min(890, sx + sym + 6) : 955;
+                    const anchor = isCritOrLeft ? "start" : "end";
+                    markup += `<text x="${scoreX}" y="${midY + 5}" fill="#dc2626" font-size="15" font-weight="700" font-family="Arial, sans-serif" text-anchor="${anchor}">${escapeHtml(String(score))}</text>`;
+                }
             }
 
         } else if (type === "circle") {
-            // Tight ellipse hugging the error word
             const cx = (xmin + xmax) / 2;
             const cy = (ymin + ymax) / 2;
             const rx = Math.max(12, (xmax - xmin) / 2 + 5);
             const ry = Math.max(10, (ymax - ymin) / 2 + 5);
+            const tooltip = fullTooltip || (score ? `Score: ${score}` : 'Partial credit / review');
+            markup += `
+                <g class="annotation-item cursor-pointer" data-id="${ann.id || idx}">
+                    <title>${escapeHtml(tooltip)}</title>
+                    <ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="none" stroke="#dc2626" stroke-width="${sw}"/>
+                </g>
+            `;
+            if (score) {
+                const isCritOrLeft = !!ann.is_criterion || xmax < 750;
+                const scoreX = isCritOrLeft ? Math.min(880, cx + rx + 6) : 955;
+                const anchor = isCritOrLeft ? "start" : "end";
+                markup += `<text x="${scoreX}" y="${cy + 5}" fill="#dc2626" font-size="15" font-weight="700" font-family="Arial, sans-serif" text-anchor="${anchor}">${escapeHtml(String(score))}</text>`;
+            }
+
+        } else if (type === "graph_header") {
+            markup += `
+                <g class="annotation-item" data-id="${ann.id || idx}">
+                    <rect x="${xmin}" y="${ymin}" width="${Math.max(160, xmax - xmin)}" height="${ymax - ymin}" rx="4" fill="#fef2f2" stroke="#dc2626" stroke-width="1.2"/>
+                    <text x="${xmin + 8}" y="${ymin + (ymax - ymin)*0.68}" fill="#b91c1c" font-size="12" font-weight="700" font-family="Arial, sans-serif">${escapeHtml(remark || 'Graph Marking')}</text>
+                </g>
+            `;
+
+        } else if (type === "char_replace" || type === "replace") {
+            const cx = (xmin + xmax) / 2;
+            const cy = (ymin + ymax) / 2;
+            const rx = Math.max(12, (xmax - xmin) / 2 + 5);
+            const ry = Math.max(10, (ymax - ymin) / 2 + 5);
+            const repl = ann.replacement || remark;
+            const routing = ann.routing || {};
             markup += `
                 <g class="annotation-item" data-id="${ann.id || idx}">
                     <ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="none" stroke="#dc2626" stroke-width="${sw}"/>
                 </g>
             `;
-            // Plain comment text just below the circle — no box
-            if (remark) {
-                const ty = Math.min(995, ymax + ry + 4);
-                markup += `<text x="${Math.max(2, xmin)}" y="${ty}" fill="#dc2626" font-size="${Math.max(9, sym * 0.48)}" font-weight="600" font-family="serif">${escapeHtml(remark)}</text>`;
+            if (repl) {
+                if (routing.use_leader_line && routing.leader_line_coords) {
+                    const c = routing.leader_line_coords;
+                    markup += `
+                        <line x1="${c[0][0]}" y1="${c[0][1]}" x2="${c[1][0]}" y2="${c[1][1]}" stroke="#dc2626" stroke-width="1.5"/>
+                        <text x="${c[1][0] + 4}" y="${c[1][1] - 2}" fill="#dc2626" font-size="14" font-weight="700" font-family="'Microsoft YaHei', sans-serif">${escapeHtml(repl)}</text>
+                    `;
+                } else {
+                    markup += `<text x="${xmin}" y="${Math.max(12, ymin - 4)}" fill="#dc2626" font-size="14" font-weight="700" font-family="'Microsoft YaHei', sans-serif">${escapeHtml(repl)}</text>`;
+                }
             }
+
+        } else if (type === "word_delete" || type === "delete" || type === "strikethrough") {
+            markup += `
+                <g class="annotation-item" data-id="${ann.id || idx}">
+                    <line x1="${xmin}" y1="${midY}" x2="${xmax}" y2="${midY}" stroke="#dc2626" stroke-width="${sw}" stroke-linecap="round"/>
+                </g>
+            `;
+            if (remark) {
+                markup += `<text x="${xmax + 6}" y="${midY + 4}" fill="#dc2626" font-size="12" font-weight="600">${escapeHtml(remark)}</text>`;
+            }
+
+        } else if (type === "block_prune" || type === "prune") {
+            markup += `
+                <g class="annotation-item" data-id="${ann.id || idx}">
+                    <line x1="${xmin}" y1="${ymin}" x2="${xmax}" y2="${ymax}" stroke="#dc2626" stroke-width="${sw}" stroke-linecap="round"/>
+                </g>
+            `;
+            if (remark) {
+                markup += `<text x="${xmin + 8}" y="${ymin - 4}" fill="#dc2626" font-size="12" font-weight="600">${escapeHtml(remark)}</text>`;
+            }
+
+        } else if (type === "caret_insert" || type === "insert" || type === "descriptive_caret") {
+            const repl = ann.replacement || remark;
+            markup += `
+                <g class="annotation-item" data-id="${ann.id || idx}">
+                    <path d="M ${xmin - 5} ${ymin + 5} L ${xmin} ${ymin} L ${xmin + 5} ${ymin + 5}" fill="none" stroke="#dc2626" stroke-width="2" stroke-linecap="round"/>
+                </g>
+            `;
+            if (repl) {
+                markup += `<text x="${xmin - 4}" y="${Math.max(12, ymin - 5)}" fill="#dc2626" font-size="13" font-weight="700" font-family="'Microsoft YaHei', sans-serif">${escapeHtml(repl)}</text>`;
+            }
+
+        } else if (type === "clause_rewrite" || type === "star_gai" || type === "caigai" || type === "sentence_rewrite") {
+            const repl = ann.replacement || remark || "";
+            let cleanRepl = String(repl).replace(/⭐/g, "★").trim();
+            if (!cleanRepl.startsWith("★改") && !cleanRepl.startsWith("改")) {
+                cleanRepl = `★改：${cleanRepl}`;
+            } else if (cleanRepl.startsWith("改")) {
+                cleanRepl = `★${cleanRepl}`;
+            }
+            const leadX = Math.min(760, xmax + 4);
+            const textTspans = wrapSvgText(cleanRepl, 775, midY, 14, 15);
+            markup += `
+                <g class="annotation-item" data-id="${ann.id || idx}">
+                    <path d="M ${xmin - 2} ${ymin - 2} Q ${xmin - 8} ${midY} ${xmin - 2} ${ymax + 2}" fill="none" stroke="#dc2626" stroke-width="${sw}" stroke-linecap="round"/>
+                    <path d="M ${xmax + 2} ${ymin - 2} Q ${xmax + 8} ${midY} ${xmax + 2} ${ymax + 2}" fill="none" stroke="#dc2626" stroke-width="${sw}" stroke-linecap="round"/>
+                    <line x1="${leadX}" y1="${midY}" x2="770" y2="${midY}" stroke="#dc2626" stroke-width="1.2" stroke-dasharray="3,3"/>
+                    <circle cx="${leadX}" cy="${midY}" r="2" fill="#dc2626"/>
+                    <text x="775" y="${midY}" fill="#dc2626" font-size="12" font-weight="700" font-family="'Microsoft YaHei', sans-serif">
+                        ${textTspans}
+                    </text>
+                </g>
+            `;
+
+        } else if (type === "margin_star" || type === "star" || type === "scaffolding") {
+            let starText = String(remark || "").replace(/⭐/g, "★").trim();
+            if (!starText.startsWith("★")) {
+                starText = `★ ${starText}`;
+            }
+            const leadX = Math.min(760, xmax + 4);
+            const textTspans = wrapSvgText(starText, 775, midY, 14, 15);
+            markup += `
+                <g class="annotation-item" data-id="${ann.id || idx}">
+                    <line x1="${leadX}" y1="${midY}" x2="770" y2="${midY}" stroke="#dc2626" stroke-width="1" stroke-dasharray="3,3"/>
+                    <circle cx="${leadX}" cy="${midY}" r="2" fill="#dc2626"/>
+                    <text x="775" y="${midY}" fill="#dc2626" font-size="12" font-weight="700" font-family="'Microsoft YaHei', sans-serif">
+                        ${textTspans}
+                    </text>
+                </g>
+            `;
+
+        } else if (type === "logic_cross") {
+            const h = sym;
+            markup += `
+                <g class="annotation-item" data-id="${ann.id || idx}">
+                    <line x1="${xmin}" y1="${midY - h*0.5}" x2="${xmin + h}" y2="${midY + h*0.5}" stroke="#dc2626" stroke-width="${sw}" stroke-linecap="round"/>
+                    <line x1="${xmin + h}" y1="${midY - h*0.5}" x2="${xmin}" y2="${midY + h*0.5}" stroke="#dc2626" stroke-width="${sw}" stroke-linecap="round"/>
+                    <rect x="${xmin - 4}" y="${ymin - 4}" width="${xmax - xmin + 8}" height="${ymax - ymin + 8}" fill="none" stroke="#dc2626" stroke-width="1.5" stroke-dasharray="2,2"/>
+                </g>
+            `;
+            if (remark) {
+                markup += `<text x="${xmin}" y="${Math.min(995, ymax + 14)}" fill="#dc2626" font-size="12" font-weight="700" font-family="'Microsoft YaHei', sans-serif">✗ ${escapeHtml(remark)}</text>`;
+            }
+
+        } else if (type === "lorms_badge") {
+            markup += `
+                <g class="annotation-item" data-id="${ann.id || idx}">
+                    <rect x="740" y="${midY - 10}" width="240" height="22" rx="4" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5"/>
+                    <text x="750" y="${midY + 5}" fill="#dc2626" font-size="11" font-weight="700">${escapeHtml(remark)}</text>
+                </g>
+            `;
 
         } else if (type === "remark") {
             // Plain text annotation (supports multiple lines)
@@ -2259,6 +3724,9 @@ function renderDirectMarkingOverlay() {
                 });
                 markup += `</text>`;
             }
+
+        } else if (type === "footnote" || type === "bottom_remark") {
+            // Suppressed to keep script overlay clean and free of overlapping comments
         }
     });
 
@@ -2273,18 +3741,36 @@ async function triggerDirectMarking() {
     const btn = document.getElementById("btn-direct-mark");
     if (btn) btn.disabled = true;
 
+    // Ensure clear markings first in UI before carrying out new direct marking
+    currentAnnotations = [];
+    if (currentSubmission) currentSubmission.annotations = [];
+    renderDirectMarkingOverlay();
+
     startAiLiveMonitor("Direct Marking (Beta): Generating grounded ticks, crosses, circles, and remarks on student script with qwen3.8:latest...");
 
     try {
+        const activeMarker = document.getElementById("review-active-marker-select")?.value || "auto";
         const resp = await fetch(`/api/submissions/${currentSubmission.id}/direct-mark`, {
-            method: "POST"
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ marker_type: activeMarker })
         });
-        const data = await resp.json();
+        let data;
+        const text = await resp.text();
+        try {
+            data = JSON.parse(text);
+        } catch (e) {
+            data = { detail: text || `Server error (${resp.status})` };
+        }
         if (resp.ok && data.success) {
             currentAnnotations = data.annotations || [];
             currentSubmission.annotations = currentAnnotations;
             renderDirectMarkingOverlay();
-            stopAiLiveMonitor(true, `Direct Marking Complete! ${currentAnnotations.length} annotations overlaid on script.`);
+            const hasFb = Boolean(data.fallback_triggered && data.fallbacks && data.fallbacks.length > 0);
+            stopAiLiveMonitor(true, `Direct Marking Complete! ${currentAnnotations.length} annotations overlaid on script.`, hasFb);
+            if (hasFb) {
+                showFallbackNotice(data.fallbacks, "Direct Visual Marking");
+            }
         } else {
             stopAiLiveMonitor(false, "Direct marking failed: " + (data.detail || JSON.stringify(data)));
             alert("Direct marking failed: " + (data.detail || "Server error"));
@@ -2328,6 +3814,14 @@ async function clearDirectMarks() {
 
 function synthesizeClientAnnotations(qGrades, pages) {
     if (!qGrades || qGrades.length === 0) return [];
+    if (typeof currentSubmission !== "undefined" && currentSubmission) {
+        const isChinese = currentSubmission.marker_type === "chinese_essay" ||
+            currentSubmission.assignment_marker_type === "chinese_essay" ||
+            (currentSubmission.assignment_subject && /chinese|华文|中文/i.test(currentSubmission.assignment_subject));
+        if (isChinese) {
+            return [];
+        }
+    }
     const numPages = Math.max(1, pages ? pages.length : 1);
     const totalQ = qGrades.length;
     const qsPerPage = Math.max(1, Math.ceil(totalQ / numPages));
@@ -3232,3 +4726,443 @@ async function handleBulkEditStudentsSubmit(e) {
         if (window.lucide) window.lucide.createIcons();
     }
 }
+
+// ==================== Google Classroom Integration ====================
+
+let googleClassroomStatus = {
+    client_secret_configured: false,
+    authenticated: false,
+    user_email: ""
+};
+
+let cachedGoogleCourses = [];
+
+async function checkGoogleClassroomStatus() {
+    try {
+        const resp = await fetch("/api/google/status");
+        if (!resp.ok) return;
+        const data = await resp.json();
+        googleClassroomStatus = data;
+        updateGoogleClassroomUI();
+    } catch (err) {
+        console.error("Failed to check Google Classroom status:", err);
+    }
+}
+
+function updateGoogleClassroomUI() {
+    const dot = document.getElementById("google-status-dot");
+    const text = document.getElementById("google-status-text");
+    const bannerDot = document.getElementById("google-modal-status-dot");
+    const bannerTitle = document.getElementById("google-modal-status-title");
+    const bannerDesc = document.getElementById("google-modal-status-desc");
+    const disconnectBtn = document.getElementById("google-btn-disconnect");
+    const setupView = document.getElementById("google-setup-view");
+    const connectedView = document.getElementById("google-connected-view");
+    const secretBadge = document.getElementById("google-secret-status-badge");
+    const connectBtn = document.getElementById("google-btn-connect");
+
+    if (googleClassroomStatus.authenticated) {
+        if (dot) dot.className = "w-2 h-2 rounded-full bg-emerald-400";
+        if (text) text.textContent = googleClassroomStatus.user_email ? googleClassroomStatus.user_email.split('@')[0] : "Classroom";
+        
+        if (bannerDot) bannerDot.className = "w-3 h-3 rounded-full bg-emerald-500";
+        if (bannerTitle) bannerTitle.textContent = "Connected to Google Classroom";
+        if (bannerDesc) bannerDesc.textContent = googleClassroomStatus.user_email || "Account authorized";
+        if (disconnectBtn) disconnectBtn.classList.remove("hidden");
+        
+        if (setupView) setupView.classList.add("hidden");
+        if (connectedView) connectedView.classList.remove("hidden");
+    } else {
+        if (dot) dot.className = "w-2 h-2 rounded-full bg-slate-500";
+        if (text) text.textContent = "Classroom";
+        
+        if (bannerDot) bannerDot.className = "w-3 h-3 rounded-full bg-slate-600";
+        if (bannerTitle) bannerTitle.textContent = "Not Connected";
+        if (bannerDesc) bannerDesc.textContent = googleClassroomStatus.client_secret_configured ? "Client secret ready. Please sign in." : "Upload client_secret.json to start.";
+        if (disconnectBtn) disconnectBtn.classList.add("hidden");
+        
+        if (setupView) setupView.classList.remove("hidden");
+        if (connectedView) connectedView.classList.add("hidden");
+        
+        if (secretBadge) {
+            if (googleClassroomStatus.client_secret_configured) {
+                secretBadge.className = "px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-950 text-emerald-300 border border-emerald-800";
+                secretBadge.textContent = "Ready";
+                if (connectBtn) connectBtn.disabled = false;
+            } else {
+                secretBadge.className = "px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800 text-slate-400";
+                secretBadge.textContent = "Missing";
+                if (connectBtn) connectBtn.disabled = true;
+            }
+        }
+    }
+}
+
+function openGoogleClassroomModal() {
+    checkGoogleClassroomStatus();
+    document.getElementById("modal-google-classroom").classList.remove("hidden");
+    if (window.lucide) window.lucide.createIcons();
+}
+
+function closeGoogleClassroomModal() {
+    document.getElementById("modal-google-classroom").classList.add("hidden");
+}
+
+async function handleUploadClientSecret(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const label = document.getElementById("google-upload-filename");
+    if (label) label.textContent = file.name;
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+        const resp = await fetch("/api/google/upload-credentials", {
+            method: "POST",
+            body: formData
+        });
+        const data = await resp.json();
+        if (resp.ok && data.success) {
+            await checkGoogleClassroomStatus();
+            alert("Google OAuth credentials saved successfully!");
+        } else {
+            alert("Failed to save credentials: " + (data.detail || JSON.stringify(data)));
+        }
+    } catch (err) {
+        console.error(err);
+        alert("Upload error: " + err.message);
+    }
+}
+
+async function connectGoogleAccount() {
+    try {
+        const resp = await fetch("/api/google/auth-url");
+        if (!resp.ok) {
+            const errData = await resp.json();
+            throw new Error(errData.detail || "Failed to generate authorization URL");
+        }
+        const data = await resp.json();
+        const authUrl = data.auth_url;
+
+        // Open OAuth popup window
+        const width = 550;
+        const height = 650;
+        const left = (window.innerWidth - width) / 2;
+        const top = (window.innerHeight - height) / 2;
+        window.open(
+            authUrl,
+            "google_oauth_popup",
+            `width=${width},height=${height},top=${top},left=${left},status=no,resizable=yes`
+        );
+    } catch (err) {
+        console.error(err);
+        alert("Google sign-in error: " + err.message);
+    }
+}
+
+async function disconnectGoogleAccount() {
+    if (!confirm("Are you sure you want to disconnect your Google account from Tallus?")) return;
+    try {
+        const resp = await fetch("/api/google/disconnect", { method: "POST" });
+        if (resp.ok) {
+            googleClassroomStatus.authenticated = false;
+            googleClassroomStatus.user_email = "";
+            updateGoogleClassroomUI();
+        }
+    } catch (err) {
+        console.error(err);
+    }
+}
+
+// Course and Roster Import
+async function openImportGoogleClassroomModal() {
+    if (!googleClassroomStatus.authenticated) {
+        openGoogleClassroomModal();
+        return;
+    }
+    document.getElementById("modal-import-google-classroom").classList.remove("hidden");
+    await loadGoogleCoursesList();
+    if (window.lucide) window.lucide.createIcons();
+}
+
+function closeImportGoogleClassroomModal() {
+    document.getElementById("modal-import-google-classroom").classList.add("hidden");
+}
+
+async function loadGoogleCoursesList() {
+    const select = document.getElementById("gc-course-select");
+    if (!select) return;
+    select.innerHTML = '<option value="">Loading courses from Google Classroom...</option>';
+
+    try {
+        const resp = await fetch("/api/google/courses");
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.detail || "Failed to load courses");
+        }
+        const courses = await resp.json();
+        cachedGoogleCourses = courses;
+
+        if (courses.length === 0) {
+            select.innerHTML = '<option value="">No active Google Classroom courses found</option>';
+            return;
+        }
+
+        select.innerHTML = '<option value="">-- Select a Google Classroom Course --</option>' +
+            courses.map(c => `<option value="${c.id}">${escapeHtml(c.name)}${c.section ? ' (' + escapeHtml(c.section) + ')' : ''}</option>`).join('');
+    } catch (err) {
+        console.error(err);
+        select.innerHTML = `<option value="">Error loading courses: ${escapeHtml(err.message)}</option>`;
+    }
+}
+
+async function handleSelectGoogleCourse() {
+    const select = document.getElementById("gc-course-select");
+    const courseId = select ? select.value : "";
+    const importBtn = document.getElementById("btn-gc-do-import");
+    const countBadge = document.getElementById("gc-students-count");
+    const previewList = document.getElementById("gc-students-preview-list");
+    const loading = document.getElementById("gc-students-loading");
+    const subjectInput = document.getElementById("gc-import-subject");
+
+    if (!courseId) {
+        if (importBtn) importBtn.disabled = true;
+        if (countBadge) countBadge.textContent = "0";
+        if (previewList) previewList.innerHTML = '<div class="text-slate-500 italic text-center py-4">Select a course above to view students</div>';
+        return;
+    }
+
+    const selectedCourse = cachedGoogleCourses.find(c => String(c.id) === String(courseId));
+    if (selectedCourse && subjectInput && !subjectInput.value) {
+        subjectInput.value = selectedCourse.section || selectedCourse.name || "";
+    }
+
+    if (loading) loading.classList.remove("hidden");
+    if (previewList) previewList.innerHTML = '<div class="text-slate-400 italic text-center py-4">Fetching enrolled students...</div>';
+
+    try {
+        const resp = await fetch(`/api/google/courses/${courseId}/students`);
+        if (!resp.ok) throw new Error("Could not fetch students");
+        const students = await resp.json();
+
+        if (countBadge) countBadge.textContent = String(students.length);
+        if (importBtn) importBtn.disabled = students.length === 0;
+
+        if (students.length === 0) {
+            if (previewList) previewList.innerHTML = '<div class="text-slate-500 italic text-center py-4">No students currently enrolled in this course</div>';
+        } else {
+            if (previewList) {
+                previewList.innerHTML = students.map((s, idx) => `
+                    <div class="flex items-center justify-between p-2 rounded-lg bg-slate-900 border border-slate-800">
+                        <div class="flex items-center gap-2">
+                            <span class="w-5 h-5 rounded-full bg-slate-800 text-indigo-300 font-bold flex items-center justify-center text-[10px]">${idx + 1}</span>
+                            <span class="font-semibold text-white">${escapeHtml(s.name)}</span>
+                        </div>
+                        <span class="text-slate-400 text-[10px] font-mono">${escapeHtml(s.email || "No email")}</span>
+                    </div>
+                `).join('');
+            }
+        }
+    } catch (err) {
+        console.error(err);
+        if (previewList) previewList.innerHTML = `<div class="text-rose-400 italic text-center py-4">Error: ${escapeHtml(err.message)}</div>`;
+    } finally {
+        if (loading) loading.classList.add("hidden");
+        if (window.lucide) window.lucide.createIcons();
+    }
+}
+
+async function executeImportGoogleRoster() {
+    const select = document.getElementById("gc-course-select");
+    const courseId = select ? select.value : "";
+    const subjectInput = document.getElementById("gc-import-subject");
+    const subject = subjectInput ? subjectInput.value.trim() : "";
+    const btn = document.getElementById("btn-gc-do-import");
+
+    if (!courseId) return;
+
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> Importing...';
+
+    try {
+        const resp = await fetch(`/api/google/courses/${courseId}/import`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ subject: subject })
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+            closeImportGoogleClassroomModal();
+            await loadStudentsRoster();
+            populateExistingClassesAndSubjects();
+            alert(`✅ Successfully imported ${data.total} student(s) from ${data.class_name}!\nCreated: ${data.created}, Updated: ${data.updated}`);
+        } else {
+            alert("Failed to import roster: " + (data.detail || JSON.stringify(data)));
+        }
+    } catch (err) {
+        console.error(err);
+        alert("Import error: " + err.message);
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+        if (window.lucide) window.lucide.createIcons();
+    }
+}
+
+// Assignment Creation: Google Classroom toggle
+async function toggleCreateAssignmentGCOptions(checked) {
+    const fields = document.getElementById("create-assignment-gc-fields");
+    if (!fields) return;
+    if (checked) {
+        if (!googleClassroomStatus.authenticated) {
+            document.getElementById("new-assignment-sync-gc").checked = false;
+            openGoogleClassroomModal();
+            return;
+        }
+        fields.classList.remove("hidden");
+        await loadCreateAssignmentGCCourses();
+    } else {
+        fields.classList.add("hidden");
+    }
+}
+
+async function loadCreateAssignmentGCCourses() {
+    const courseSelect = document.getElementById("new-assignment-gc-course");
+    if (!courseSelect) return;
+    courseSelect.innerHTML = '<option value="">Loading courses...</option>';
+
+    try {
+        const resp = await fetch("/api/google/courses");
+        if (!resp.ok) throw new Error("Could not load courses");
+        const courses = await resp.json();
+        cachedGoogleCourses = courses;
+
+        courseSelect.innerHTML = '<option value="">-- Select Google Classroom Course --</option>' +
+            courses.map(c => `<option value="${c.id}">${escapeHtml(c.name)}${c.section ? ' (' + escapeHtml(c.section) + ')' : ''}</option>`).join('');
+    } catch (err) {
+        courseSelect.innerHTML = `<option value="">Error loading courses</option>`;
+    }
+}
+
+async function handleSelectCreateAssignmentGCCourse() {
+    const courseId = document.getElementById("new-assignment-gc-course")?.value;
+    const cwSelect = document.getElementById("new-assignment-gc-coursework");
+    if (!cwSelect) return;
+
+    if (!courseId) {
+        cwSelect.innerHTML = '<option value="create_new">✨ Create New Assignment in Classroom</option>';
+        return;
+    }
+
+    try {
+        const resp = await fetch(`/api/google/courses/${courseId}/coursework`);
+        const coursework = resp.ok ? await resp.json() : [];
+
+        cwSelect.innerHTML = '<option value="create_new">✨ Create New Assignment in Classroom</option>' +
+            (coursework || []).map(cw => `<option value="${cw.id}">Link to: ${escapeHtml(cw.title)} (${cw.maxPoints} pts)</option>`).join('');
+    } catch (err) {
+        cwSelect.innerHTML = '<option value="create_new">✨ Create New Assignment in Classroom</option>';
+    }
+}
+
+// Release Marked Submission back to Google Classroom
+async function releaseCurrentSubmissionToClassroom() {
+    if (!currentSubmission || !currentSubmission.id) {
+        alert("Please select a student submission first.");
+        return;
+    }
+
+    if (currentSubmission.status !== "approved") {
+        const proceed = confirm("This submission has not been marked as 'Approved' yet. Would you like to approve and release it now?");
+        if (!proceed) return;
+        await approveSubmission();
+    }
+
+    const btn = document.getElementById("btn-release-classroom");
+    const originalHtml = btn.innerHTML;
+
+    btn.disabled = true;
+    btn.innerHTML = '<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Releasing...';
+
+    try {
+        const resp = await fetch(`/api/google/submissions/${currentSubmission.id}/release`, {
+            method: "POST"
+        });
+        const data = await resp.json();
+
+        if (resp.ok && data.success) {
+            btn.className = "px-2.5 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-semibold transition-all flex items-center gap-1 shrink-0 shadow-sm";
+            btn.innerHTML = '<i data-lucide="check-check" class="w-3.5 h-3.5"></i> Released';
+            
+            let msg = `✅ Successfully released marked script for ${data.student_name}!\n• Grade: ${data.score} assigned\n• Submission officially returned`;
+            if (data.drive_link) {
+                msg += `\n• Marked PDF: ${data.drive_link}`;
+            }
+            alert(msg);
+        } else {
+            // Check if error is missing linkage
+            if (data.detail && data.detail.includes("not linked")) {
+                const linkNow = confirm("This assignment is not yet linked to a Google Classroom course. Would you like to link it now?");
+                if (linkNow) {
+                    await promptLinkAssignmentToClassroom(currentSubmission.assignment_id);
+                }
+            } else {
+                alert("Release error: " + (data.detail || JSON.stringify(data)));
+            }
+            btn.innerHTML = originalHtml;
+        }
+    } catch (err) {
+        console.error(err);
+        alert("Failed to release submission: " + err.message);
+        btn.innerHTML = originalHtml;
+    } finally {
+        btn.disabled = false;
+        if (window.lucide) window.lucide.createIcons();
+    }
+}
+
+async function promptLinkAssignmentToClassroom(assignmentId) {
+    if (!googleClassroomStatus.authenticated) {
+        openGoogleClassroomModal();
+        return;
+    }
+    const resp = await fetch("/api/google/courses");
+    if (!resp.ok) {
+        alert("Failed to load Google Classroom courses.");
+        return;
+    }
+    const courses = await resp.json();
+    if (courses.length === 0) {
+        alert("No active Google Classroom courses found.");
+        return;
+    }
+
+    const courseNames = courses.map((c, i) => `${i + 1}. ${c.name} ${c.section || ''}`).join('\n');
+    const choice = prompt(`Select Google Classroom Course (enter number 1-${courses.length}):\n${courseNames}`);
+    const idx = parseInt(choice) - 1;
+    if (isNaN(idx) || idx < 0 || idx >= courses.length) return;
+
+    const selectedCourse = courses[idx];
+    try {
+        const linkResp = await fetch(`/api/google/assignments/${assignmentId}/link`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                course_id: selectedCourse.id,
+                create_new: true
+            })
+        });
+        const linkData = await linkResp.json();
+        if (linkResp.ok && linkData.success) {
+            alert(`✅ Assignment linked to ${selectedCourse.name}! You can now click 'Classroom' to release marked scripts.`);
+        } else {
+            alert("Error linking assignment: " + (linkData.detail || JSON.stringify(linkData)));
+        }
+    } catch (err) {
+        alert("Linking failed: " + err.message);
+    }
+}
+

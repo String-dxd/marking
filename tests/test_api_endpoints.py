@@ -59,12 +59,44 @@ def test_api_endpoints():
     db.delete_student(s_stu_id)
     print("Delete submission endpoint passed!")
 
-    # 6. Root serve
+    # 6. Test Split Combined Scan with Trim Last Page
+    import io
+    import pymupdf
+    mock_pdf = pymupdf.open()
+    for i in range(4):
+        p = mock_pdf.new_page(width=595, height=842)
+        p.insert_text((50, 100), f"Name: Jane Doe\nPage: {i+1}", fontsize=14)
+    pdf_bytes = mock_pdf.write()
+    mock_pdf.close()
+    
+    split_resp = client.post(
+        "/api/submissions/split-combined-scan",
+        data={
+            "assignment_id": a_id,
+            "pages_per_student": 4,
+            "trim_last_page": True
+        },
+        files={
+            "file": ("test_split.pdf", pdf_bytes, "application/pdf")
+        }
+    )
+    assert split_resp.status_code == 200
+    split_data = split_resp.json()
+    assert split_data["success"] is True
+    assert split_data["total_split"] == 1
+    created_sub_id = split_data["submissions"][0]["submission_id"]
+    # Check page count of created submission: should be 3 (trimmed from 4)
+    assert split_data["submissions"][0]["page_count"] == 3
+    # Clean up created submission
+    client.delete(f"/api/submissions/{created_sub_id}")
+    print("Split combined scan with trim_last_page passed!")
+
+    # 7. Root serve
     root_resp = client.get("/")
     assert root_resp.status_code == 200
     print("Frontend index serving passed!")
 
-    # 7. Clean up test assignment so no test assignment persists
+    # 8. Clean up test assignment so no test assignment persists
     del_resp = client.delete(f"/api/assignments/{a_id}")
     assert del_resp.status_code == 200
     print("Cleaned up test assignment successfully!")

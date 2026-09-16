@@ -1,6 +1,7 @@
 import requests
 import json
 import re
+import time
 from typing import List, Dict, Any, Optional
 from app.core.config import OLLAMA_BASE_URL, DEFAULT_VISION_MODEL, DEFAULT_TEXT_MODEL
 
@@ -72,7 +73,7 @@ class OllamaClient:
         messages: List[Dict[str, Any]],
         format_json: bool = False,
         temperature: float = 0.1,
-        max_retries: int = 1,
+        max_retries: int = 3,
         timeout: int = 180,
         num_ctx: int = 4096,
         num_predict: Optional[int] = None,
@@ -144,16 +145,29 @@ class OllamaClient:
                         "raw": data
                     }
                 else:
+                    if resp.status_code in (500, 502, 503, 504) and attempt < max_retries - 1:
+                        time.sleep(1.5 * (attempt + 1))
+                        continue
                     return {
                         "success": False,
                         "error": f"Ollama API returned HTTP {resp.status_code}: {resp.text}"
                     }
+            except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError, requests.exceptions.RequestException) as e:
+                if attempt < max_retries - 1:
+                    time.sleep(2.0 * (attempt + 1))
+                    continue
+                return {
+                    "success": False,
+                    "error": f"Failed to reach Ollama ({type(e).__name__}): {str(e)}"
+                }
             except Exception as e:
-                if attempt == max_retries - 1:
-                    return {
-                        "success": False,
-                        "error": f"Failed to reach Ollama: {str(e)}"
-                    }
+                if attempt < max_retries - 1:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                return {
+                    "success": False,
+                    "error": f"Failed to reach Ollama: {str(e)}"
+                }
         return {"success": False, "error": "Unknown error in generate_chat"}
 
 # Global singleton

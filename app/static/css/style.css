@@ -50,8 +50,8 @@
     box-shadow: 0 0 12px rgba(99, 102, 241, 0.5);
 }
 
-/* Question Accordion Card */
-.q-card {
+/* Question Accordion Card & Rubric Card */
+.q-card, .q-rubric-card {
     background: #090d16;
     border: 1px solid #1e293b;
     border-radius: 12px;
@@ -59,7 +59,7 @@
     transition: border-color 0.15s;
 }
 
-.q-card:focus-within {
+.q-card:focus-within, .q-rubric-card:focus-within {
     border-color: #4f46e5;
 }
 
@@ -106,4 +106,30 @@
 /* Safe touch target heights */
 button, select, input[type="text"], input[type="number"] {
     touch-action: manipulation;
+}
+
+/* Select & Dropdown Styling for Dark Theme across Browsers */
+select {
+    color-scheme: dark;
+}
+
+select option {
+    background-color: #0f172a !important; /* slate-900 */
+    color: #f1f5f9 !important; /* slate-100 */
+}
+
+select option:hover, select option:focus, select option:checked {
+    background-color: #1e293b !important; /* slate-800 */
+    color: #818cf8 !important; /* indigo-400 */
+}
+
+#review-active-marker-select {
+    background-color: #1e293b !important;
+    color: #c7d2fe !important;
+    color-scheme: dark;
+}
+
+#review-active-marker-select option {
+    background-color: #0f172a !important;
+    color: #f8fafc !important;
 }

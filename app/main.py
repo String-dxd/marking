@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import BASE_DIR, PROCESSED_DIR, UPLOADS_DIR, REPORTS_DIR
 from app.core.db import init_db
 from app.core.ollama_client import ollama_client
-from app.api import assignments, students, submissions, grading, reports
+from app.api import assignments, students, submissions, grading, reports, google_classroom
 
 app = FastAPI(
     title="Tallus - Assessment & Analytics",
@@ -30,6 +30,7 @@ app.include_router(students.router)
 app.include_router(submissions.router)
 app.include_router(grading.router)
 app.include_router(reports.router)
+app.include_router(google_classroom.router)
 
 # Mount static asset directories
 static_dir = Path(__file__).resolve().parent / "static"
